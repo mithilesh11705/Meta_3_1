@@ -19,7 +19,7 @@ class TestPRReviewEnv:
         assert env._task_name == "easy"
         assert env._current_step == 1
         assert env._done is False
-        assert env._last_reward == 0.0
+        assert env._last_reward == 0.001
         assert len(env._history) == 0
 
     def test_reset_valid_task(self):
@@ -74,7 +74,7 @@ class TestPRReviewEnv:
         result = env.step(action)
         
         assert result.observation is not None
-        assert 0.0 <= result.reward <= 1.0
+        assert 0.0 < result.reward < 1.0
         assert isinstance(result.done, bool)
         assert "task" in result.info
         assert "step" in result.info

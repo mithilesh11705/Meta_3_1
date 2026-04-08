@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .models import Action, Observation, StepResult
-from .reward import compute_reward_breakdown
+from .reward import _MIN_SCORE, compute_reward_breakdown
 from .tasks.easy import FIXTURE as EASY_FIXTURE, GOLD as EASY_GOLD
 from .tasks.hard import FIXTURE as HARD_FIXTURE, GOLD as HARD_GOLD
 from .tasks.medium import FIXTURE as MEDIUM_FIXTURE, GOLD as MEDIUM_GOLD
@@ -56,7 +56,7 @@ class PRReviewEnv:
     def __init__(self) -> None:
         self._task_name: str = "easy"
         self._current_step: int = 1
-        self._last_reward: float = 0.0
+        self._last_reward: float = _MIN_SCORE
         self._done: bool = False
         self._history: list[dict[str, Any]] = []
         self._observation: Observation | None = None
@@ -88,7 +88,7 @@ class PRReviewEnv:
 
         self._task_name = task_name
         self._current_step = 1
-        self._last_reward = 0.0
+        self._last_reward = _MIN_SCORE
         self._done = False
         self._history = []
         self._gold = dict(TASK_CONFIGS[task_name].gold)
