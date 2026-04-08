@@ -38,6 +38,8 @@ Modern engineering teams triage pull requests continuously, and quality depends 
 | `current_step` | `int` | Current step in episode |
 | `max_steps` | `int` | Maximum allowed steps |
 | `task_name` | `str` | Task id (`easy`, `medium`, `hard`) |
+| `review_stage` | `str` | Current workflow stage (`identify_risk`, `assess_impact`, `final_triage`) |
+| `stage_prompt` | `str` | Stage-specific instruction for what the agent should focus on this step |
 
 ## Action Space
 
@@ -51,14 +53,25 @@ Modern engineering teams triage pull requests continuously, and quality depends 
 Allowed labels: `bug`, `security`, `enhancement`, `documentation`, `breaking-change`, `needs-tests`, `trivial`, `urgent`.
 
 ## Reward Function
-`reward = mean(decision_score, label_score, priority_score, summary_score) - step_penalty`, clamped to `(0, 1)`.
+`reward = stage_weighted_mean(decision_score, label_score, priority_score, summary_score) - contradiction_penalty - step_penalty`, clamped to `(0, 1)`.
 
 1. `decision_score` (0.25 weight): `1.0` if decision matches gold, else `0.0`.
 2. `label_score` (0.25 weight): F1 score between predicted and gold labels.
 3. `priority_score` (0.25 weight): exact=`1.0`, off-by-1=`0.5`, off-by-2=`0.25`, else=`0.0`.
 4. `summary_score` (0.25 weight): keyword hit ratio against `gold_keywords`, with hard penalty to `0.0` when summary length `<20` or `>500` chars.
 
-Step penalty: subtract `0.02 * (current_step - 1)` to reward fast, correct triage.
+Additional shaping:
+- Stage-aware weighting: early steps emphasize evidence and impact discovery, final steps emphasize coherent triage.
+- Contradiction penalties: inconsistent outputs like `approve` + `security`/`urgent` are penalized.
+- Step penalty: subtract `0.02 * (current_step - 1)` to reward fast, correct triage.
+
+## Review Workflow
+
+Each episode now follows a realistic review progression instead of repeating the same final answer:
+
+1. `identify_risk`: identify the core bug or vulnerability with code evidence
+2. `assess_impact`: explain user/system impact and align labels + priority
+3. `final_triage`: provide final decision with concise remediation guidance
 
 ## Tasks
 

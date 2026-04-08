@@ -33,6 +33,8 @@ class Observation(BaseModel):
     current_step: int = Field(ge=1)
     max_steps: int = Field(ge=1)
     task_name: str
+    review_stage: str = Field(default="identify_risk")
+    stage_prompt: str = Field(default="")
 
 
 class Action(BaseModel):

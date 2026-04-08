@@ -22,6 +22,8 @@ observation_space:
   current_step: int
   max_steps: int
   task_name: str
+  review_stage: str
+  stage_prompt: str
 action_space:
   decision:
     type: enum
@@ -53,7 +55,7 @@ tasks:
     max_steps: 8
     expected_score_range: [0.05, 0.95]
 reward:
-  description: Mean of four dense axes (decision correctness, label F1, priority distance score, keyword-based summary heuristic) minus 0.02 per step beyond step 1, clamped strictly within (0, 1).
+  description: Stage-aware weighted reward over decision correctness, label F1, priority distance, and evidence-grounded review summary, with contradiction penalties and a 0.02 step penalty beyond step 1, clamped strictly within (0, 1).
 baseline_scores:
   easy: 0.85
   medium: 0.62

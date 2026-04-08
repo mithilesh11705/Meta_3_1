@@ -51,6 +51,21 @@ TASK_CONFIGS: dict[str, TaskConfig] = {
     ),
 }
 
+_REVIEW_STAGES: tuple[tuple[str, str], ...] = (
+    (
+        "identify_risk",
+        "Step 1: identify the core risk or correctness issue and cite concrete code evidence in the review summary.",
+    ),
+    (
+        "assess_impact",
+        "Step 2: explain user or system impact, choose aligned labels and priority, and mention why the change matters.",
+    ),
+    (
+        "final_triage",
+        "Step 3+: provide your final triage decision with concise remediation guidance grounded in the diff or comments.",
+    ),
+)
+
 
 def _serialize_reward_breakdown(breakdown: Any) -> dict[str, float]:
     """Expose only strict (0, 1) score fields in API payloads."""
@@ -71,6 +86,8 @@ class PRReviewEnv:
     def _build_observation(self, task_name: str) -> Observation:
         task = TASK_CONFIGS[task_name]
         fixture = task.fixture
+        stage_idx = min(max(self._current_step - 1, 0), len(_REVIEW_STAGES) - 1)
+        review_stage, stage_prompt = _REVIEW_STAGES[stage_idx]
         return Observation(
             pr_id=int(fixture["pr_id"]),
             title=str(fixture["title"]),
@@ -85,6 +102,8 @@ class PRReviewEnv:
             current_step=self._current_step,
             max_steps=task.max_steps,
             task_name=task_name,
+            review_stage=review_stage,
+            stage_prompt=stage_prompt,
         )
 
     def reset(self, task_name: str) -> Observation:
@@ -110,10 +129,15 @@ class PRReviewEnv:
         self._last_reward = breakdown.total
         reward_breakdown = _serialize_reward_breakdown(breakdown)
 
-        self._done = breakdown.total >= 0.95 or self._current_step >= self._observation.max_steps
+        min_completion_step = min(3, self._observation.max_steps)
+        self._done = (
+            (self._current_step >= min_completion_step and breakdown.total >= 0.85)
+            or self._current_step >= self._observation.max_steps
+        )
         self._history.append(
             {
                 "step": self._current_step,
+                "review_stage": self._observation.review_stage,
                 "action": action.model_dump(),
                 "reward": breakdown.total,
                 "reward_breakdown": reward_breakdown,
@@ -133,6 +157,7 @@ class PRReviewEnv:
             info={
                 "task": self._task_name,
                 "step": self._history[-1]["step"],
+                "review_stage": self._history[-1]["review_stage"],
                 "reward_breakdown": reward_breakdown,
             },
         )

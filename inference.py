@@ -17,7 +17,7 @@ ENV_NAME = "pr-review-env"
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://127.0.0.1:7860")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY") or ""
+API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("API_KEY") or ""
 MAX_STEPS = int(os.getenv("MAX_STEPS", "8"))
 MIN_SCORE = 0.01
 MAX_SCORE = 0.99
@@ -90,40 +90,55 @@ def _observation_prompt(observation: dict[str, Any]) -> str:
             "deletions": observation.get("deletions"),
             "current_step": observation.get("current_step"),
             "max_steps": observation.get("max_steps"),
+            "review_stage": observation.get("review_stage"),
+            "stage_prompt": observation.get("stage_prompt"),
         },
         ensure_ascii=True,
     )
 
 
 def _llm_action(client: OpenAI, observation: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    stage = observation.get("review_stage", "identify_risk")
+    stage_guidance = observation.get("stage_prompt", "")
     try:
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": (
-                        "Analyze this pull request observation and respond with only the required JSON.\n"
-                        + _observation_prompt(observation)
-                    ),
-                },
-            ],
-            temperature=0.1,
-            max_tokens=300,
-        )
-        content = response.choices[0].message.content or ""
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"Current review stage: {stage}\n"
+                    f"{stage_guidance}\n"
+                    "Respond with the required JSON only. Keep the summary aligned to this stage while staying consistent overall.\n"
+                    + _observation_prompt(observation)
+                ),
+            },
+        ]
+        last_error: str | None = None
+        for _ in range(2):
+            response = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=messages,
+                temperature=0.1,
+                max_tokens=300,
+            )
+            content = response.choices[0].message.content or ""
+            cleaned = _strip_code_fences(content)
+            if not cleaned:
+                last_error = "json_decode_error:empty_response"
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": "Return valid JSON only with exactly the required keys."})
+                continue
+            try:
+                parsed = json.loads(cleaned)
+                break
+            except json.JSONDecodeError as exc:
+                last_error = f"json_decode_error:{exc.msg}"
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": "Your last response was invalid. Return valid JSON only."})
+        else:
+            return None, last_error or "json_decode_error:unknown"
     except Exception as exc:
         return None, f"llm_error:{exc}"
-
-    cleaned = _strip_code_fences(content)
-    if not cleaned:
-        return None, "json_decode_error:empty_response"
-
-    try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        return None, f"json_decode_error:{exc.msg}"
 
     required_keys = {"decision", "labels", "priority", "review_summary"}
     if set(parsed.keys()) != required_keys:

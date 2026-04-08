@@ -16,10 +16,39 @@ _PRIORITY_ORDER: dict[str, int] = {
 _MIN_SCORE = 0.01
 _MAX_SCORE = 0.99
 
+_TASK_EVIDENCE: dict[str, dict[str, list[str]]] = {
+    "easy": {
+        "issue_terms": ["off-by-one", "inclusive", "end + 1", "slice bounds"],
+        "impact_terms": ["correctness", "bugfix", "slice", "window_slice"],
+        "remediation_terms": ["looks good", "approve", "fix", "correct"],
+        "file_terms": ["list_helpers.py", "window_slice"],
+    },
+    "medium": {
+        "issue_terms": ["token expiry", "exp", "expiry check", "session timeout"],
+        "impact_terms": ["security", "session", "vulnerability", "compromised token"],
+        "remediation_terms": ["restore", "expiry checks", "regression tests", "request changes"],
+        "file_terms": ["middleware.py", "tokens.py", "auth"],
+    },
+    "hard": {
+        "issue_terms": ["race condition", "toctou", "get then incr", "non-atomic"],
+        "impact_terms": ["redis", "concurrency", "limit bypass", "high concurrency"],
+        "remediation_terms": ["atomic", "lua", "transaction", "request changes"],
+        "file_terms": ["rate_limiter.py", "middleware.py", "redis"],
+    },
+}
+
 
 def _clamp(value: float) -> float:
     """Clamp a score to be strictly between 0 and 1."""
     return max(_MIN_SCORE, min(_MAX_SCORE, value))
+
+
+def _review_stage_weights(observation: Observation) -> tuple[float, float, float, float]:
+    if observation.review_stage == "identify_risk":
+        return (0.15, 0.15, 0.10, 0.60)
+    if observation.review_stage == "assess_impact":
+        return (0.20, 0.30, 0.30, 0.20)
+    return (0.30, 0.25, 0.20, 0.25)
 
 
 def _decision_score(action: Action, gold: dict[str, Any]) -> float:
@@ -100,13 +129,63 @@ def _summary_score(action: Action, gold: dict[str, Any]) -> float:
     return _clamp(raw)
 
 
+def _evidence_score(observation: Observation, action: Action) -> float:
+    summary = action.review_summary.strip().lower()
+    task_terms = _TASK_EVIDENCE.get(observation.task_name, {})
+    stage_key = {
+        "identify_risk": "issue_terms",
+        "assess_impact": "impact_terms",
+        "final_triage": "remediation_terms",
+    }.get(observation.review_stage, "issue_terms")
+
+    stage_terms = task_terms.get(stage_key, [])
+    file_terms = task_terms.get("file_terms", [])
+
+    term_hits = sum(1 for term in stage_terms if term in summary)
+    file_hits = sum(1 for term in file_terms if term in summary)
+
+    stage_score = term_hits / len(stage_terms) if stage_terms else 0.0
+    file_score = file_hits / len(file_terms) if file_terms else 0.0
+    raw = 0.05 + min(0.9, stage_score * 0.7 + file_score * 0.2)
+
+    if observation.review_stage == "final_triage" and len(summary.split()) < 8:
+        raw -= 0.1
+
+    return _clamp(raw)
+
+
+def _consistency_penalty(action: Action, gold: dict[str, Any]) -> float:
+    penalty = 0.0
+    labels = set(action.labels)
+    expected_labels = set(str(label) for label in gold.get("labels", []))
+
+    severe_labels = {"security", "urgent", "breaking-change"}
+    if action.decision == "approve" and labels & severe_labels:
+        penalty += 0.2
+    if action.priority == "low" and labels & {"security", "urgent"}:
+        penalty += 0.12
+    if action.decision == "close" and expected_labels:
+        penalty += 0.15
+    if len(labels - expected_labels) >= 3:
+        penalty += 0.08
+
+    return penalty
+
+
 def compute_reward_breakdown(observation: Observation, action: Action, gold: dict[str, Any]) -> Reward:
     decision = _decision_score(action=action, gold=gold)
     labels = _label_score(action=action, gold=gold)
     priority = _priority_score(action=action, gold=gold)
-    summary = _summary_score(action=action, gold=gold)
+    summary = _clamp((_summary_score(action=action, gold=gold) * 0.6) + (_evidence_score(observation, action) * 0.4))
 
-    base = (decision + labels + priority + summary) / 4.0
+    w_decision, w_labels, w_priority, w_summary = _review_stage_weights(observation)
+    base = (
+        decision * w_decision
+        + labels * w_labels
+        + priority * w_priority
+        + summary * w_summary
+    )
+    base -= _consistency_penalty(action, gold)
     step_penalty = max(observation.current_step - 1, 0) * 0.02
     total = _clamp(base - step_penalty)
 
