@@ -230,6 +230,44 @@ class TestPRReviewEnv:
             assert result.observation.current_step == initial_obs_step + 1
             assert env._observation.current_step == initial_obs_step + 1
 
+    def test_review_stage_progression(self):
+        """Test staged workflow progresses across steps."""
+        env = PRReviewEnv()
+        obs = env.reset("medium")
+        assert obs.review_stage == "identify_risk"
+
+        action = Action(
+            decision="request_changes",
+            labels=["security", "breaking-change"],
+            priority="critical",
+            review_summary="The auth middleware removes token expiry checks in middleware.py and creates a session security risk.",
+        )
+
+        step1 = env.step(action)
+        if not step1.done:
+            assert step1.info["review_stage"] == "identify_risk"
+            assert step1.observation.review_stage == "assess_impact"
+
+        if not step1.done:
+            step2 = env.step(action)
+            if not step2.done:
+                assert step2.info["review_stage"] == "assess_impact"
+                assert step2.observation.review_stage == "final_triage"
+
+    def test_done_requires_meaningful_progression(self):
+        """Test strong answers do not finish before the final review stage."""
+        env = PRReviewEnv()
+        env.reset("easy")
+        action = Action(
+            decision="approve",
+            labels=["bug"],
+            priority="low",
+            review_summary="The off-by-one bug in utils/list_helpers.py is fixed by making the slice end inclusive with end + 1, so the change is correct and safe to approve.",
+        )
+
+        first = env.step(action)
+        assert first.done is False
+
     def test_task_configs_structure(self):
         """Test task configs have correct structure"""
         for task_id, config in TASK_CONFIGS.items():

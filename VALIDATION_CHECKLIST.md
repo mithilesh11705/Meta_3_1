@@ -49,7 +49,7 @@ docker run --rm -p 7860:7860 pr-review-env
 # Set required environment variables
 export API_BASE_URL=https://router.huggingface.co/v1
 export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
-export HF_TOKEN=your_token_here
+export OPENAI_API_KEY=your_token_here
 
 # Run inference - must complete without error
 python inference.py
@@ -89,10 +89,10 @@ print(f'All in range strict (0,1): {all(0.0 < s < 1.0 for s in scores)}')
 # Must be set before running inference
 export API_BASE_URL=https://router.huggingface.co/v1
 export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct  
-export HF_TOKEN=your_actual_token
+export OPENAI_API_KEY=your_actual_token
 
 # Verify they're set
-env | grep -E "(API_BASE_URL|MODEL_NAME|HF_TOKEN)"
+env | grep -E "(API_BASE_URL|MODEL_NAME|OPENAI_API_KEY|HF_TOKEN)"
 ```
 
 ## Performance Requirements
@@ -167,9 +167,9 @@ done
 
 # 2. Check environment variables
 echo "Checking environment variables..."
-if [[ -z "$API_BASE_URL" ]] || [[ -z "$MODEL_NAME" ]] || [[ -z "$HF_TOKEN" ]]; then
+if [[ -z "$API_BASE_URL" ]] || [[ -z "$MODEL_NAME" ]] || { [[ -z "$OPENAI_API_KEY" ]] && [[ -z "$HF_TOKEN" ]]; }; then
     echo "  ERROR: Missing required environment variables"
-    echo "  Set: API_BASE_URL, MODEL_NAME, HF_TOKEN"
+    echo "  Set: API_BASE_URL, MODEL_NAME, OPENAI_API_KEY (or HF_TOKEN)"
     exit 1
 else
     echo "  Environment variables set"
@@ -243,10 +243,11 @@ echo "Ready for submission."
 
 When all validations pass:
 1. Ensure HF Space is deployed and responds to health checks
-2. Verify openenv.yaml is valid
-3. Confirm Dockerfile builds successfully
-4. Test inference script completes without errors
-5. Verify all 3 tasks have working graders with proper score ranges
-6. Check environment variables are properly configured
+2. Verify `/reset`, `/step`, `/tasks`, and `/health` all respond on the live Space
+3. Verify openenv.yaml is valid
+4. Confirm Dockerfile builds successfully
+5. Test inference script completes without errors
+6. Verify all 3 tasks have working graders with proper score ranges
+7. Check environment variables are properly configured
 
 Run the final validation command above to confirm everything is ready.

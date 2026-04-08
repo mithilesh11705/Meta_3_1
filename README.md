@@ -13,13 +13,11 @@ pinned: false
 ## Why This Environment Exists
 Modern engineering teams triage pull requests continuously, and quality depends on correctly interpreting diffs, reviewer signals, and risk, not just PR descriptions. `pr-review-env` is a deterministic OpenEnv benchmark that simulates real PR review workflows across bugfix, security-sensitive, and contested infrastructure changes so agents can be measured on decision quality, prioritization, and review communication under realistic constraints.
 
-**What makes this environment competitive for finals:**
-- **Production-grade realism**: Real diffs, authentic reviewer comments, and actual security vulnerabilities
-- **Sophisticated reward function**: Dense, multi-axis scoring with partial credit and semantic understanding
-- **Deterministic grading**: No LLM calls in evaluation - fully reproducible
-- **Comprehensive testing**: Full test suite with edge cases and validation
-- **Enterprise features**: Session management, logging, metrics, and API documentation
-- **Judge-friendly**: Clean spec compliance, detailed documentation, and production-ready deployment
+Key properties:
+- Realistic pull request diffs and reviewer comments across bugfix, security, and concurrency scenarios
+- Deterministic scoring with no LLM calls in the grader
+- Stage-aware review workflow instead of a single one-shot answer
+- Containerized FastAPI deployment with OpenEnv-compatible metadata
 
 ## Observation Space
 
@@ -326,157 +324,36 @@ print(f"Breakdown: {result.info['reward_breakdown']}")
 ## Environment Architecture
 
 ### Component Overview
-```
+`
 pr-review-env/
   app.py              # FastAPI server with session management
-  inference.py         # Baseline agent with enhanced prompting
+  inference.py        # Baseline agent using the OpenAI client
   pr_review_env/
-    env.py          # Core environment logic
-    models.py       # Pydantic models with validation
-    reward.py       # Sophisticated reward function
-    tasks/          # Task definitions and fixtures
-  tests/              # Comprehensive test suite
+    env.py            # Core environment logic and staged workflow
+    models.py         # Pydantic models with validation
+    reward.py         # Deterministic stage-aware reward function
+    tasks/            # Task definitions and fixtures
+  tests/              # Targeted model, env, and reward tests
   fixtures/           # Realistic PR data
-```
+`
 
-### Design Principles
-- **Deterministic**: Same input always produces same output
-- **Observable**: Full reward breakdown and state inspection
-- **Concurrent**: Multiple sessions supported
-- **Testable**: 100% test coverage with edge cases
-- **Production-ready**: Logging, error handling, metrics
+### Design Notes
+- The environment stays deterministic during grading.
+- Observations evolve by review stage so multi-step episodes are meaningful.
+- Reward shaping combines decision quality with evidence-grounded summaries and consistency checks.
+- The API is designed to be easy to validate locally and on Hugging Face Spaces.
 
-### Reward Function Details
-The reward function uses 4 independent axes:
+## Additional Documentation
 
-1. **Decision Score** (25% weight)
-   - Exact match: 1.0
-   - Same category (approve <-> request_changes): 0.3
-   - Different category: 0.0
-
-2. **Label Score** (25% weight)
-   - F1 score between predicted and gold labels
-   - Critical labels (security, breaking-change) weighted higher
-
-3. **Priority Score** (25% weight)
-   - Exact match: 1.0
-   - Off by 1: 0.5
-   - Off by 2: 0.25
-   - Off by 3+: 0.0
-
-4. **Summary Score** (25% weight)
-   - Keyword matching with partial credit
-   - Length penalties and quality bonuses
-   - Semantic similarity scoring
-
-**Step Penalty**: 0.02 × (current_step - 1)
-
-### Evaluation Criteria for Finals
-**What judges look for:**
-- Real-world grounding and authenticity
-- Clean spec compliance
-- Reward functions that signal progress
-- Code that runs first try in CI
-- Comprehensive testing
-- Professional documentation
-- Production-ready deployment
-
-**This environment delivers on all criteria with enterprise-grade quality.**
-
----
-
-## 📋 For Judges: Evaluation Criteria Compliance
-
-### ✅ Real-World Grounding (9.5/10)
-- **Authentic security vulnerabilities**: Token expiry removal, TOCTOU race conditions
-- **Realistic team dynamics**: Contested reviews, author pushback, cross-functional conflicts
-- **Production code patterns**: Proper Git diffs, actual file paths, CI integration
-- **Business impact awareness**: Security vs performance trade-offs, priority assessment
-
-### ✅ Clean Spec Compliance (10/10)
-- **Perfect OpenEnv interface**: All required endpoints with proper signatures
-- **Advanced session management**: UUID-based concurrent sessions
-- **Pydantic v2 excellence**: Strict validation, custom validators, type safety
-- **Deterministic grading**: Zero LLM calls, fully reproducible evaluation
-
-### ✅ Reward Functions That Signal Progress (9/10)
-- **4-axis dense scoring**: Decision, labels, priority, summary with partial credit
-- **Business-weighted evaluation**: Critical labels (security) weighted higher
-- **Semantic understanding**: Keyword matching with partial credit and quality bonuses
-- **Efficiency rewards**: Step penalties encourage quick, correct triage
-
-### ✅ Code That Runs First Try in CI (10/10)
-- **Production Dockerfile**: Multi-stage build, non-root user, <3 minute build
-- **Zero external dependencies**: No auth required, pure Python, no GPU
-- **Comprehensive testing**: 100% coverage with edge cases and validation
-- **Enterprise error handling**: Structured logging, proper HTTP codes
-
----
-
-## 📚 Comprehensive Documentation
-
-- **[JUDGES_GUIDE.md](JUDGES_GUIDE.md)** - Detailed evaluation criteria breakdown
+- **[JUDGES_GUIDE.md](JUDGES_GUIDE.md)** - Evaluation criteria breakdown
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - System design and technical architecture
-- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Production deployment across platforms
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Deployment across platforms
 - **[SCORING_ANALYSIS.md](SCORING_ANALYSIS.md)** - Reward function design and mathematics
-- **[COMPETITIVE_ANALYSIS.md](COMPETITIVE_ANALYSIS.md)** - Market positioning and competitive advantages
+- **[COMPETITIVE_ANALYSIS.md](COMPETITIVE_ANALYSIS.md)** - Positioning and comparison notes
 
----
+## Quick Judge Validation
 
-## 🏆 Why This Wins The Hackathon
-
-### **Enterprise-Grade Execution**
-Unlike typical hackathon entries, this demonstrates production-ready quality:
-- Professional API design with session management and metrics
-- Comprehensive test suite with 100% coverage
-- Production deployment guides for multiple platforms
-- Enterprise logging and monitoring capabilities
-
-### **Innovation Within Constraints**
-Advanced features while maintaining strict compliance:
-- Sophisticated multi-axis reward function (deterministic)
-- Partial credit system for progressive learning signals
-- Real-world scenarios with authentic security vulnerabilities
-- Business-aware evaluation with critical issue weighting
-
-### **Judge-Friendly Design**
-Built specifically for evaluation success:
-- One-command setup and validation
-- Transparent scoring with full breakdown
-- Comprehensive documentation targeting evaluation criteria
-- Professional presentation and code quality
-
-### **Competitive Differentiators**
-What sets this apart from other entries:
-- **9 API endpoints** vs typical 3-4 basic endpoints
-- **4-axis reward function** vs simple binary scoring
-- **Real security vulnerabilities** vs toy examples
-- **Production deployment guides** vs basic Docker setup
-- **Comprehensive testing** vs minimal functionality tests
-
----
-
-## 🎯 Expected Competition Performance
-
-### **Baseline Scores (Enhanced)**
-| Task | Expected Score | Why It Wins |
-|------|---------------|------------|
-| Easy | **0.95+** | Perfect decision + keyword matching + quality bonuses |
-| Medium | **0.72+** | Security detection + critical label weighting |
-| Hard | **0.48+** | Race condition identification + contested review analysis |
-
-### **Model Capabilities Tested**
-- **Code comprehension**: Understanding realistic infrastructure changes
-- **Security analysis**: Identifying actual vulnerabilities in middleware
-- **Concurrency reasoning**: Detecting TOCTOU race conditions
-- **Social intelligence**: Interpreting team conflicts and reviewer dynamics
-- **Risk assessment**: Priority and business impact evaluation
-
----
-
-## 🚀 Quick Judge Validation (5 Minutes)
-
-```bash
+`ash
 # Clone and build
 git clone <repository-url>
 cd pr-review-env
@@ -485,19 +362,11 @@ docker build -t pr-review-env .
 # Run and verify
 docker run --rm -p 7860:7860 pr-review-env &
 sleep 3
-curl http://localhost:7860/health  # Should return healthy status
+curl http://localhost:7860/health
 
 # Test evaluation
-export HF_TOKEN=your_token
-python inference.py  # Should complete all 3 tasks successfully
+export OPENAI_API_KEY=your_token
+python inference.py
+`
 
-# Verify testing
-pytest tests/ -v  # Should pass all 50+ tests
-```
-
-**Expected outcome**: Everything works perfectly, demonstrating production-ready quality that exceeds typical hackathon standards.
-
----
-
-**This environment represents what senior Meta engineers build: production-quality software that advances the state of evaluation environments while maintaining the rigor required for competitive assessment.**
-
+Expected outcome: the API responds, the baseline runs, and the staged benchmark produces deterministic scores across all tasks.

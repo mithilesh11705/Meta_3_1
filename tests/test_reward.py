@@ -356,3 +356,89 @@ class TestRewardFunction:
         
         # Should match multiple keywords
         assert breakdown.summary_score >= 0.6
+
+    def test_contradiction_penalty_for_approve_with_security_labels(self):
+        """Test inconsistent outputs are penalized."""
+        obs = Observation(
+            pr_id=2044,
+            title="Auth middleware cleanup",
+            description="Refactors middleware",
+            diff="- expires_at = payload.get('exp')",
+            comments=["maya: This removes token expiry"],
+            files_changed=["src/auth/middleware.py"],
+            author="kevin",
+            base_branch="release/2026.04",
+            additions=22,
+            deletions=13,
+            current_step=3,
+            max_steps=6,
+            task_name="medium",
+            review_stage="final_triage",
+            stage_prompt="Provide the final triage decision.",
+        )
+        gold = {
+            "decision": "request_changes",
+            "labels": ["security", "breaking-change"],
+            "priority": "critical",
+            "gold_keywords": ["token expiry", "session", "security risk"],
+        }
+        coherent = Action(
+            decision="request_changes",
+            labels=["security", "breaking-change"],
+            priority="critical",
+            review_summary="The auth middleware removes token expiry checks in middleware.py, creating a session security risk. Please restore expiry validation and add regression tests.",
+        )
+        contradictory = Action(
+            decision="approve",
+            labels=["security", "breaking-change"],
+            priority="low",
+            review_summary="There is a token expiry security issue in middleware.py, but this can still be approved.",
+        )
+
+        coherent_score = compute_reward_breakdown(obs, coherent, gold).total
+        contradictory_score = compute_reward_breakdown(obs, contradictory, gold).total
+
+        assert coherent_score > contradictory_score
+
+    def test_stage_evidence_scoring_rewards_file_grounding(self):
+        """Test evidence-grounded summaries beat vague summaries at the same stage."""
+        obs = Observation(
+            pr_id=3099,
+            title="Rate limiter improvement",
+            description="Adds Redis rate limiter",
+            diff="current = int(current_raw) if current_raw else 0",
+            comments=["sre-olivia: This is a TOCTOU race"],
+            files_changed=["api/gateway/rate_limiter.py"],
+            author="max",
+            base_branch="main",
+            additions=94,
+            deletions=4,
+            current_step=1,
+            max_steps=8,
+            task_name="hard",
+            review_stage="identify_risk",
+            stage_prompt="Identify the core issue with concrete evidence.",
+        )
+        gold = {
+            "decision": "request_changes",
+            "labels": ["bug", "needs-tests", "urgent"],
+            "priority": "high",
+            "gold_keywords": ["race condition", "TOCTOU", "Redis", "concurrency", "atomic"],
+        }
+        grounded = Action(
+            decision="request_changes",
+            labels=["bug", "needs-tests"],
+            priority="high",
+            review_summary="api/gateway/rate_limiter.py uses a GET then INCR pattern, which creates a Redis TOCTOU race condition under concurrency.",
+        )
+        vague = Action(
+            decision="request_changes",
+            labels=["bug", "needs-tests"],
+            priority="high",
+            review_summary="There may be a problem here and this looks risky during execution.",
+        )
+
+        grounded_score = compute_reward_breakdown(obs, grounded, gold).summary_score
+        vague_score = compute_reward_breakdown(obs, vague, gold).summary_score
+
+        assert grounded_score > vague_score
