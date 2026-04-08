@@ -16,6 +16,8 @@ API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 MAX_STEPS = 8
+_MIN_SCORE = 0.001
+_MAX_SCORE = 0.999
 
 
 SYSTEM_PROMPT = """You are a senior code review triage agent with 10+ years of experience in infrastructure and security.
@@ -190,12 +192,16 @@ def _format_action(action: dict[str, Any] | None) -> str:
     return json.dumps(action, separators=(",", ":"), ensure_ascii=True)
 
 
+def _bounded_score(value: float) -> float:
+    return max(_MIN_SCORE, min(_MAX_SCORE, value))
+
+
 def run_task(client: OpenAI, task: str) -> None:
     print(f"[START] task={task} env={ENV_NAME} model={MODEL_NAME}")
     try:
         observation, session_id = _http_post("/reset", {"task": task})
     except error.URLError as exc:
-        print(f"[END] success=false steps=0 score=<0.00> rewards=error:{exc}")
+        print(f"[END] success=false steps=0 score=<{_MIN_SCORE:.3f}> rewards=error:{exc}")
         return
 
     rewards: list[float] = []
@@ -206,27 +212,27 @@ def run_task(client: OpenAI, task: str) -> None:
         action, parse_error = _llm_action(client, observation)
 
         if action is None:
-            print(f"[STEP] step={step} action=\"null\" reward=<0.00> done=false error={parse_error}")
+            print(f"[STEP] step={step} action=\"null\" reward=<{_MIN_SCORE:.3f}> done=false error={parse_error}")
             executed_steps += 1
-            rewards.append(0.0)
+            rewards.append(_MIN_SCORE)
             continue
 
         try:
             step_result, _ = _http_post("/step", action, session_id=session_id)
         except error.URLError as exc:
             print(
-                f"[STEP] step={step} action={_format_action(action)} reward=<0.00> "
+                f"[STEP] step={step} action={_format_action(action)} reward=<{_MIN_SCORE:.3f}> "
                 f"done=false error=env_error:{exc}"
             )
             executed_steps += 1
-            rewards.append(0.0)
+            rewards.append(_MIN_SCORE)
             continue
 
-        reward_value = float(step_result.get("reward", 0.0))
+        reward_value = _bounded_score(float(step_result.get("reward", 0.0)))
         done = bool(step_result.get("done", False))
         err = ""
         print(
-            f"[STEP] step={step} action={_format_action(action)} reward=<{reward_value:.2f}> "
+            f"[STEP] step={step} action={_format_action(action)} reward=<{reward_value:.3f}> "
             f"done={str(done).lower()} error={err}"
         )
 
@@ -237,11 +243,11 @@ def run_task(client: OpenAI, task: str) -> None:
         if done:
             break
 
-    score = sum(rewards) / len(rewards) if rewards else 0.0
-    rewards_serialized = ",".join(f"{value:.2f}" for value in rewards)
+    score = _bounded_score(sum(rewards) / len(rewards)) if rewards else _MIN_SCORE
+    rewards_serialized = ",".join(f"{_bounded_score(value):.3f}" for value in rewards)
     print(
         f"[END] success={str(done).lower()} steps={executed_steps} "
-        f"score=<{score:.2f}> rewards={rewards_serialized}"
+        f"score=<{score:.3f}> rewards={rewards_serialized}"
     )
 
 
