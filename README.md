@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # pr-review-env
 
 ## Why This Environment Exists
@@ -478,3 +479,4 @@ pytest tests/ -v  # Should pass all 50+ tests
 ---
 
 **This environment represents what senior Meta engineers build: production-quality software that advances the state of evaluation environments while maintaining the rigor required for competitive assessment.**
+
