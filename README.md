@@ -51,7 +51,7 @@ Modern engineering teams triage pull requests continuously, and quality depends 
 Allowed labels: `bug`, `security`, `enhancement`, `documentation`, `breaking-change`, `needs-tests`, `trivial`, `urgent`.
 
 ## Reward Function
-`reward = mean(decision_score, label_score, priority_score, summary_score) - step_penalty`, clamped to `[0.0, 1.0]`.
+`reward = mean(decision_score, label_score, priority_score, summary_score) - step_penalty`, clamped to `(0, 1)`.
 
 1. `decision_score` (0.25 weight): `1.0` if decision matches gold, else `0.0`.
 2. `label_score` (0.25 weight): F1 score between predicted and gold labels.

@@ -30,7 +30,7 @@ All automated validation tests have been successfully completed. The project is 
 
 ### 5. Tasks + Graders Test: PASSED
 - 3 tasks implemented with working graders
-- All scores in valid 0.0-1.0 range
+- All scores in valid strict (0,1) range
 - Grader scores: [0.75, 0.667, 0.625]
 
 ### 6. Environment Variables: CONFIGURED
@@ -115,7 +115,7 @@ scores = [
 
 print('All validations passed!')
 print(f'Grader scores: {scores}')
-print(f'Scores in range: {all(0.0 <= s <= 1.0 for s in scores)}')
+print(f'Scores in range: {all(0.0 < s < 1.0 for s in scores)}')
 "
 
 echo "=== Ready for Submission ==="

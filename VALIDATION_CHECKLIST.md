@@ -69,7 +69,7 @@ from pr_review_env.tasks.medium import grade as medium_grade
 from pr_review_env.tasks.hard import grade as hard_grade
 from pr_review_env.models import Action
 
-# Test each grader returns 0.0-1.0 range
+# Test each grader returns strict (0,1) range
 actions = [
     Action(decision='approve', labels=['bug'], priority='low', review_summary='LGTM'),
     Action(decision='request_changes', labels=['security'], priority='critical', review_summary='Security issue'),
@@ -78,7 +78,7 @@ actions = [
 
 scores = [easy_grade(actions[0]), medium_grade(actions[1]), hard_grade(actions[2])]
 print(f'Scores: {scores}')
-print(f'All in range 0.0-1.0: {all(0.0 <= s <= 1.0 for s in scores)}')
+print(f'All in range strict (0,1): {all(0.0 < s < 1.0 for s in scores)}')
 "
 ```
 
@@ -199,7 +199,7 @@ scores = [
     hard_grade(Action(decision='request_changes', labels=['bug'], priority='high', review_summary='Race condition'))
 ]
 print(f'  Scores: {scores}')
-print(f'  All in 0.0-1.0 range: {all(0.0 <= s <= 1.0 for s in scores)}')
+print(f'  All in strict (0,1) range: {all(0.0 < s < 1.0 for s in scores)}')
 " || exit 1
 
 # 5. Test server endpoints
@@ -231,7 +231,7 @@ echo "Ready for submission."
 
 ### 3. Graders return invalid scores
 - Check reward computation logic
-- Verify score bounds (0.0-1.0)
+- Verify score bounds (strict (0,1))
 - Test with various actions
 
 ### 4. Server doesn't respond

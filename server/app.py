@@ -7,7 +7,7 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict
 
-from pr_review_env.env import PRReviewEnv, TASK_CONFIGS
+from pr_review_env.env import PRReviewEnv, TASK_CONFIGS, _serialize_reward_breakdown
 from pr_review_env.models import Action, Observation, StepResult
 
 # Configure structured logging
@@ -260,7 +260,7 @@ def validate_action(body: ValidationRequest) -> ValidationResponse:
         
         return ValidationResponse(
             valid=True,
-            reward_breakdown=breakdown.model_dump()
+            reward_breakdown=_serialize_reward_breakdown(breakdown)
         )
         
     except Exception as exc:

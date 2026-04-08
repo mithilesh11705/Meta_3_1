@@ -52,6 +52,11 @@ TASK_CONFIGS: dict[str, TaskConfig] = {
 }
 
 
+def _serialize_reward_breakdown(breakdown: Any) -> dict[str, float]:
+    """Expose only strict (0, 1) score fields in API payloads."""
+    return breakdown.model_dump(exclude={"step_penalty"})
+
+
 class PRReviewEnv:
     def __init__(self) -> None:
         self._task_name: str = "easy"
@@ -103,6 +108,7 @@ class PRReviewEnv:
 
         breakdown = compute_reward_breakdown(observation=self._observation, action=action, gold=self._gold)
         self._last_reward = breakdown.total
+        reward_breakdown = _serialize_reward_breakdown(breakdown)
 
         self._done = breakdown.total >= 0.95 or self._current_step >= self._observation.max_steps
         self._history.append(
@@ -110,7 +116,7 @@ class PRReviewEnv:
                 "step": self._current_step,
                 "action": action.model_dump(),
                 "reward": breakdown.total,
-                "reward_breakdown": breakdown.model_dump(),
+                "reward_breakdown": reward_breakdown,
                 "done": self._done,
             }
         )
@@ -127,7 +133,7 @@ class PRReviewEnv:
             info={
                 "task": self._task_name,
                 "step": self._history[-1]["step"],
-                "reward_breakdown": breakdown.model_dump(),
+                "reward_breakdown": reward_breakdown,
             },
         )
 

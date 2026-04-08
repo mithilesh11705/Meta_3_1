@@ -166,8 +166,8 @@ def _summary_score(action: Action, gold: dict[str, Any]) -> float:
 ```
 
 ### Mathematical Foundation
-- **Length Score**: 0.0-1.0 based on optimal length (50-200 chars)
-- **Keyword Score**: 0.0-1.0 based on exact + partial matches
+- **Length Score**: strict (0,1) based on optimal length (50-200 chars)
+- **Keyword Score**: strict (0,1) based on exact + partial matches
 - **Quality Bonus**: 0.0-0.2 for professional communication
 - **Final Score**: Weighted combination (40% length, 50% keywords, 10% quality)
 
@@ -190,7 +190,7 @@ final_reward = max(0.0, min(1.0, base_reward - step_penalty))
 ### Mathematical Foundation
 - **Linear penalty**: 0.02 per step beyond first
 - **Maximum penalty**: 0.14 (7 steps × 0.02) for 8-step tasks
-- **Bounded reward**: Clamped to [0.0, 1.0] range
+- **Bounded reward**: Clamped to (0, 1) range
 
 ### Real-World Justification
 In practice, senior engineers make quick decisions. The 2% per step penalty encourages efficiency while allowing thoughtful analysis.
@@ -234,7 +234,7 @@ In practice, senior engineers make quick decisions. The 2% per step penalty enco
 ### Desirable Properties
 
 1. **Deterministic**: Same input always produces same output
-2. **Bounded**: Output always in [0.0, 1.0] range
+2. **Bounded**: Output always in (0, 1) range
 3. **Differentiable**: Smooth gradients for learning (where applicable)
 4. **Interpretable**: Clear breakdown of scoring components
 5. **Fair**: No bias toward specific model types
@@ -243,7 +243,7 @@ In practice, senior engineers make quick decisions. The 2% per step penalty enco
 
 ```python
 # Bounded output
-assert 0.0 <= compute_reward(observation, action, gold) <= 1.0
+assert 0.0 < compute_reward(observation, action, gold) < 1.0
 
 # Deterministic behavior
 assert compute_reward(o, a, g) == compute_reward(o, a, g)

@@ -162,7 +162,7 @@ class TestTaskModules:
             # Grade should return a float between 0 and 1
             score = task.grade(action)
             assert isinstance(score, float)
-            assert 0.0 <= score <= 1.0
+            assert 0.0 < score < 1.0
 
     def test_perfect_score_possible(self):
         """Test that perfect score is possible with gold action"""
