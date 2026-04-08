@@ -50,7 +50,7 @@ SESSION_STORE: dict[str, PRReviewEnv] = {}
 class ResetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    task: str
+    task: str = "easy"
 
 
 def resolve_session_id(session_id: str | None = Header(default=None, alias="session_id")) -> str:
@@ -77,19 +77,25 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 @app.post("/reset", response_model=Observation)
-def reset(body: ResetRequest, response: Response, session_id: str | None = Header(default=None, alias="session_id")) -> Observation:
+def reset(
+    body: ResetRequest | None = None,
+    response: Response = None,
+    session_id: str | None = Header(default=None, alias="session_id"),
+) -> Observation:
     start_time = time.time()
     resolved_session_id = session_id or str(uuid4())
     
-    logger.info(f"Reset request - task: {body.task}, session_id: {resolved_session_id}")
+    task = body.task if body else "easy"
     
-    if body.task not in TASK_CONFIGS:
-        logger.error(f"Invalid task requested: {body.task}")
+    logger.info(f"Reset request - task: {task}, session_id: {resolved_session_id}")
+    
+    if task not in TASK_CONFIGS:
+        logger.error(f"Invalid task requested: {task}")
         raise HTTPException(
             status_code=400, 
             detail={
                 "error": "invalid_task",
-                "message": f"Unknown task '{body.task}'",
+                "message": f"Unknown task '{task}'",
                 "available_tasks": list(TASK_CONFIGS.keys())
             }
         )
@@ -101,12 +107,13 @@ def reset(body: ResetRequest, response: Response, session_id: str | None = Heade
             SESSION_STORE[resolved_session_id] = env
             logger.info(f"Created new environment for session: {resolved_session_id}")
         
-        observation = env.reset(body.task)
+        observation = env.reset(task)
         
-        response.headers["session_id"] = resolved_session_id
+        if response:
+            response.headers["session_id"] = resolved_session_id
         
         duration = time.time() - start_time
-        logger.info(f"Reset completed - session: {resolved_session_id}, task: {body.task}, duration: {duration:.3f}s")
+        logger.info(f"Reset completed - session: {resolved_session_id}, task: {task}, duration: {duration:.3f}s")
         
         return observation
         
