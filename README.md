@@ -1,4 +1,13 @@
-<<<<<<< HEAD
+---
+title: PR Review Environment
+emoji: 🏆
+colorFrom: green
+colorTo: indigo
+sdk: docker
+app_file: app.py
+pinned: false
+---
+
 # pr-review-env
 
 ## Why This Environment Exists
