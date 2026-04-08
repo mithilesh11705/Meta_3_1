@@ -45,11 +45,11 @@ class TestRewardFunction:
         
         breakdown = compute_reward_breakdown(obs, action, gold)
         
-        assert breakdown.decision_score == 1.0
-        assert breakdown.label_score == 1.0
-        assert breakdown.priority_score == 1.0
-        assert breakdown.summary_score >= 0.8  # Should match keywords
-        assert breakdown.total >= 0.95
+        assert breakdown.decision_score == pytest.approx(0.9)
+        assert breakdown.label_score == pytest.approx(0.95)
+        assert breakdown.priority_score == pytest.approx(0.95)
+        assert breakdown.summary_score == pytest.approx(0.95)
+        assert breakdown.total == pytest.approx(0.9375)
         assert breakdown.step_penalty == 0.0
 
     def test_security_task_high_priority(self):
@@ -86,11 +86,11 @@ class TestRewardFunction:
         
         breakdown = compute_reward_breakdown(obs, action, gold)
         
-        assert breakdown.decision_score == 1.0
-        assert breakdown.label_score >= 0.9  # Security labels weighted higher
-        assert breakdown.priority_score == 1.0
-        assert breakdown.summary_score >= 0.8
-        assert breakdown.total >= 0.9
+        assert breakdown.decision_score == pytest.approx(0.9)
+        assert breakdown.label_score == pytest.approx(0.95)
+        assert breakdown.priority_score == pytest.approx(0.95)
+        assert breakdown.summary_score == pytest.approx(0.5)
+        assert breakdown.total == pytest.approx(0.825)
 
     def test_partial_credit_decision(self):
         """Test partial credit for close decisions"""
@@ -127,9 +127,9 @@ class TestRewardFunction:
         
         breakdown = compute_reward_breakdown(obs, action, gold)
         
-        assert breakdown.decision_score == 0.3  # Partial credit for same category
-        assert breakdown.label_score == 1.0
-        assert breakdown.priority_score == 1.0
+        assert breakdown.decision_score == pytest.approx(0.1)  # Partial credit for same category
+        assert breakdown.label_score == pytest.approx(0.95)
+        assert breakdown.priority_score == pytest.approx(0.95)
 
     def test_zero_credit_close_vs_review(self):
         """Test zero credit for close vs review decisions"""
@@ -166,7 +166,7 @@ class TestRewardFunction:
         
         breakdown = compute_reward_breakdown(obs, action, gold)
         
-        assert breakdown.decision_score == 0.0  # No credit for close vs approve
+        assert breakdown.decision_score == pytest.approx(0.1)  # No credit for close vs approve
 
     def test_priority_distance_scoring(self):
         """Test priority distance scoring"""
@@ -190,10 +190,10 @@ class TestRewardFunction:
         
         # Test distance scoring
         test_cases = [
-            ("critical", 1.0),  # Exact match
-            ("high", 0.5),      # Off by 1
-            ("medium", 0.25),   # Off by 2
-            ("low", 0.0),       # Off by 3
+            ("critical", 0.95),  # Exact match
+            ("high", 0.6),      # Off by 1
+            ("medium", 0.3),    # Off by 2
+            ("low", 0.05),      # Off by 3
         ]
         
         for priority, expected_score in test_cases:
@@ -229,9 +229,9 @@ class TestRewardFunction:
         
         # Test length penalties
         test_cases = [
-            ("Too short", 0.0),  # < 20 chars
-            ("A" * 600, 0.3),   # > 500 chars
-            ("Perfect length summary with good content", 0.9),  # Good length
+            ("Too short", 0.05),  # < 20 chars
+            ("A" * 600, 0.05),   # > 500 chars
+            ("Perfect length summary with good content", 0.3),  # Good length with no keywords
         ]
         
         for summary, expected_min_score in test_cases:

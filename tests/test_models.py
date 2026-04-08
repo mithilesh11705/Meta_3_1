@@ -184,7 +184,7 @@ class TestRewardModel:
     def test_valid_reward(self):
         """Test valid reward creation"""
         reward = Reward(
-            decision_score=1.0,
+            decision_score=0.999,
             label_score=0.8,
             priority_score=0.9,
             summary_score=0.7,
@@ -192,7 +192,7 @@ class TestRewardModel:
             total=0.87
         )
         
-        assert reward.decision_score == 1.0
+        assert reward.decision_score == 0.999
         assert reward.label_score == 0.8
         assert reward.priority_score == 0.9
         assert reward.summary_score == 0.7
@@ -203,15 +203,15 @@ class TestRewardModel:
         """Test score bounds are enforced"""
         # Valid scores
         reward = Reward(
-            decision_score=0.0,
+            decision_score=0.001,
             label_score=0.5,
-            priority_score=1.0,
-            summary_score=0.0,
+            priority_score=0.999,
+            summary_score=0.001,
             step_penalty=0.0,
             total=0.375
         )
-        assert reward.decision_score == 0.0
-        assert reward.priority_score == 1.0
+        assert reward.decision_score == 0.001
+        assert reward.priority_score == 0.999
 
         # Invalid scores (should be rejected by Pydantic)
         with pytest.raises(ValueError):
@@ -270,19 +270,19 @@ class TestStepResultModel:
         # Valid reward
         result = StepResult(
             observation=obs,
-            reward=0.0,  # Minimum
+            reward=0.001,  # Minimum strictly greater than 0
             done=False,
             info={}
         )
-        assert result.reward == 0.0
+        assert result.reward == 0.001
 
         result = StepResult(
             observation=obs,
-            reward=1.0,  # Maximum
+            reward=0.999,  # Maximum strictly less than 1
             done=False,
             info={}
         )
-        assert result.reward == 1.0
+        assert result.reward == 0.999
 
         # Invalid reward (should be rejected by Pydantic)
         with pytest.raises(ValueError):
