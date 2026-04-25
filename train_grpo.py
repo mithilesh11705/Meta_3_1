@@ -643,7 +643,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--logging-steps", type=int, default=5)
     parser.add_argument("--save-steps", type=int, default=50)
     parser.add_argument("--num-generations", type=int, default=2)
-    parser.add_argument("--episodes-per-task", type=int, default=2)
+    parser.add_argument("--episodes-per-task", type=int, default=4)
     parser.add_argument("--max-episode-steps", type=int, default=6)
     parser.add_argument("--eval-tasks-per-difficulty", type=int, default=3)
     parser.add_argument("--skip-initial-eval", action="store_true")
