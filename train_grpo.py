@@ -650,6 +650,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-post-eval", action="store_true")
     parser.add_argument("--env-timeout-seconds", type=int, default=120)
     parser.add_argument("--env-max-retries", type=int, default=3)
+    parser.add_argument("--strict-json-reward", action="store_true", default=True)
+    parser.add_argument("--no-strict-json-reward", dest="strict_json_reward", action="store_false")
+    parser.add_argument("--parse-failure-reward", type=float, default=0.01)
     parser.add_argument("--use-unsloth", action="store_true")
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=16)
@@ -705,9 +708,10 @@ def main() -> int:
     reward_rows: list[dict[str, Any]] = []
     reward_components: list[dict[str, Any]] = []
     parse_fallback_count = 0
+    parse_success_count = 0
 
     def env_reward_fn(completions: list[Any], task: list[str] | None = None, **_kwargs: Any) -> list[float]:
-        nonlocal parse_fallback_count
+        nonlocal parse_fallback_count, parse_success_count
         rewards: list[float] = []
         tasks = task if isinstance(task, list) else ["easy"] * len(completions)
         for idx, completion in enumerate(completions):
@@ -715,7 +719,13 @@ def main() -> int:
             parsed = safe_json_loads(raw)
             if parsed is None:
                 parse_fallback_count += 1
+                if args.strict_json_reward:
+                    # In strict RLVR mode, malformed JSON gets minimum reward.
+                    rewards.append(clamp_reward(args.parse_failure_reward))
+                    continue
                 parsed = heuristic_action_from_text(raw, tasks[idx])
+            else:
+                parse_success_count += 1
             score, breakdown = env.validate(tasks[idx], parsed)
             rewards.append(score)
             if breakdown:
@@ -746,6 +756,14 @@ def main() -> int:
     print("[INFO] Starting GRPO training")
     trainer = GRPOTrainer(**trainer_kwargs)
     trainer.train()
+
+    total_parse_attempts = parse_success_count + parse_fallback_count
+    parse_success_rate = (parse_success_count / total_parse_attempts) if total_parse_attempts else 0.0
+    print(
+        "[INFO] Parse stats: "
+        f"success={parse_success_count}, fallback={parse_fallback_count}, "
+        f"success_rate={parse_success_rate:.3f}"
+    )
 
     final_model_dir = output_dir / "checkpoints" / "final"
     final_model_dir.mkdir(parents=True, exist_ok=True)
@@ -813,6 +831,8 @@ def main() -> int:
         "after_training": after,
         "improvement_overall": after["overall"] - baseline["overall"],
         "parse_fallback_count": parse_fallback_count,
+        "parse_success_count": parse_success_count,
+        "parse_success_rate": parse_success_rate,
         "config": vars(args),
     }
     with (output_dir / "logs" / "training_summary.json").open("w", encoding="utf-8") as handle:
