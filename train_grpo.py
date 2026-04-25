@@ -212,20 +212,36 @@ def heuristic_action_from_text(raw: str, task: str) -> dict[str, Any]:
 @dataclass
 class EnvClient:
     base_url: str
+    timeout_seconds: int = 120
+    max_retries: int = 3
 
     def _post(self, path: str, payload: dict[str, Any], session_id: str | None = None) -> tuple[dict[str, Any], str | None]:
         headers = {"Content-Type": "application/json"}
         if session_id:
             headers["session_id"] = session_id
-        req = request.Request(
-            url=f"{self.base_url}{path}",
-            method="POST",
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-        )
-        with request.urlopen(req, timeout=60) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-            return body, resp.headers.get("session_id")
+        last_error: Exception | None = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                req = request.Request(
+                    url=f"{self.base_url}{path}",
+                    method="POST",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers=headers,
+                )
+                with request.urlopen(req, timeout=self.timeout_seconds) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                    return body, resp.headers.get("session_id")
+            except Exception as exc:
+                last_error = exc
+                if attempt < self.max_retries:
+                    wait_s = 1.5 * attempt
+                    print(f"[WARN] Env call failed {path} attempt {attempt}/{self.max_retries}: {exc}. Retrying in {wait_s:.1f}s")
+                    time.sleep(wait_s)
+                else:
+                    print(f"[ERROR] Env call failed {path} after {self.max_retries} attempts: {exc}")
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"Env call failed unexpectedly for path {path}")
 
     def reset(self, task: str) -> tuple[dict[str, Any], str]:
         observation, session_id = self._post("/reset", {"task": task})
@@ -435,7 +451,9 @@ def evaluate_model(
         all_tasks = tasks_by_difficulty.get(difficulty, [difficulty])
         # Sample a subset for evaluation to keep runtime manageable
         eval_tasks = random.sample(all_tasks, min(eval_tasks_per_difficulty, len(all_tasks)))
+        print(f"[EVAL] {difficulty}: evaluating {len(eval_tasks)} task(s)")
         for task in eval_tasks:
+            print(f"[EVAL] task={task}")
             episode_scores: list[float] = []
             episode_latencies: list[float] = []
             episode_latency_adjusted_scores: list[float] = []
@@ -613,8 +631,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen2.5-3B-Instruct")
     parser.add_argument("--output-dir", type=str, default="artifacts/grpo_run")
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--num-samples", type=int, default=120)
-    parser.add_argument("--num-train-epochs", type=int, default=1)
+    parser.add_argument("--num-samples", type=int, default=160)
+    parser.add_argument("--num-train-epochs", type=int, default=2)
     parser.add_argument("--per-device-train-batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
@@ -627,6 +645,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-generations", type=int, default=2)
     parser.add_argument("--episodes-per-task", type=int, default=2)
     parser.add_argument("--max-episode-steps", type=int, default=6)
+    parser.add_argument("--eval-tasks-per-difficulty", type=int, default=3)
+    parser.add_argument("--skip-initial-eval", action="store_true")
+    parser.add_argument("--skip-post-eval", action="store_true")
+    parser.add_argument("--env-timeout-seconds", type=int, default=120)
+    parser.add_argument("--env-max-retries", type=int, default=3)
     parser.add_argument("--use-unsloth", action="store_true")
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=16)
@@ -642,22 +665,42 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    env = EnvClient(args.env_base_url)
+    env = EnvClient(
+        args.env_base_url,
+        timeout_seconds=args.env_timeout_seconds,
+        max_retries=args.env_max_retries,
+    )
     print(f"[INFO] Building curriculum dataset from {args.env_base_url}")
     dataset = build_training_dataset(env, args.num_samples, curriculum=(0.6, 0.3, 0.1), seed=args.seed)
 
     print(f"[INFO] Loading model: {args.model_name}")
     model, tokenizer = load_model(args)
 
-    print("[INFO] Running baseline evaluation")
-    baseline, baseline_rows = evaluate_model(
-        env=env,
-        model=model,
-        tokenizer=tokenizer,
-        episodes_per_task=args.episodes_per_task,
-        max_episode_steps=args.max_episode_steps,
-        max_new_tokens=args.max_new_tokens,
-    )
+    if args.skip_initial_eval:
+        print("[INFO] Skipping baseline evaluation (--skip-initial-eval enabled)")
+        baseline = {
+            "easy_avg": MIN_REWARD,
+            "easy_latency_adjusted_avg": MIN_REWARD,
+            "medium_avg": MIN_REWARD,
+            "medium_latency_adjusted_avg": MIN_REWARD,
+            "hard_avg": MIN_REWARD,
+            "hard_latency_adjusted_avg": MIN_REWARD,
+            "overall": MIN_REWARD,
+            "overall_latency_adjusted": MIN_REWARD,
+            "mean_latency_seconds": 0.0,
+        }
+        baseline_rows: list[dict[str, Any]] = []
+    else:
+        print("[INFO] Running baseline evaluation")
+        baseline, baseline_rows = evaluate_model(
+            env=env,
+            model=model,
+            tokenizer=tokenizer,
+            episodes_per_task=args.episodes_per_task,
+            max_episode_steps=args.max_episode_steps,
+            max_new_tokens=args.max_new_tokens,
+            eval_tasks_per_difficulty=args.eval_tasks_per_difficulty,
+        )
 
     reward_rows: list[dict[str, Any]] = []
     reward_components: list[dict[str, Any]] = []
@@ -709,15 +752,27 @@ def main() -> int:
     trainer.save_model(str(final_model_dir))
     tokenizer.save_pretrained(str(final_model_dir))
 
-    print("[INFO] Running post-training evaluation")
-    after, after_rows = evaluate_model(
-        env=env,
-        model=trainer.model,
-        tokenizer=tokenizer,
-        episodes_per_task=args.episodes_per_task,
-        max_episode_steps=args.max_episode_steps,
-        max_new_tokens=args.max_new_tokens,
-    )
+    if args.skip_post_eval:
+        print("[INFO] Skipping post-training evaluation (--skip-post-eval enabled)")
+        after = dict(baseline)
+        after_rows: list[dict[str, Any]] = []
+    else:
+        print("[INFO] Running post-training evaluation")
+        try:
+            after, after_rows = evaluate_model(
+                env=env,
+                model=trainer.model,
+                tokenizer=tokenizer,
+                episodes_per_task=args.episodes_per_task,
+                max_episode_steps=args.max_episode_steps,
+                max_new_tokens=args.max_new_tokens,
+                eval_tasks_per_difficulty=args.eval_tasks_per_difficulty,
+            )
+        except Exception as exc:
+            print(f"[WARN] Post-training evaluation failed: {exc}")
+            print("[WARN] Continuing and writing training artifacts anyway.")
+            after = dict(baseline)
+            after_rows = []
 
     write_csv(output_dir / "logs" / "reward_history.csv", reward_rows, ["training_step", "mean_reward", "timestamp"])
     if baseline_rows:
