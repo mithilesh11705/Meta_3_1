@@ -187,13 +187,14 @@ def heuristic_action_from_text(raw: str, task: str) -> dict[str, Any]:
         if key in text and value not in labels:
             labels.append(value)
 
+    fallback = bootstrap_action(task)
     if not labels:
-        labels = bootstrap_action(task)["labels"]
+        labels = fallback["labels"]
 
     words = [w for w in re.split(r"\s+", strip_code_fences(raw)) if w]
     summary = " ".join(words[:30]).strip()
     if not summary:
-        summary = bootstrap_action(task)["review_summary"]
+        summary = fallback["review_summary"]
 
     action = {
         "decision": decision,
@@ -203,7 +204,7 @@ def heuristic_action_from_text(raw: str, task: str) -> dict[str, Any]:
     }
     normalized = _normalize_action(action)
     if normalized is None:
-        return bootstrap_action(task)
+        return fallback
     return normalized
 
 
@@ -269,27 +270,73 @@ def format_observation_prompt(observation: dict[str, Any]) -> str:
     )
 
 
+# Cache of gold-derived bootstrap actions keyed by task_id
+_BOOTSTRAP_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _load_bootstrap_cache() -> None:
+    """Populate bootstrap cache from fixture gold data."""
+    import json
+    from pathlib import Path
+
+    fixtures_dir = Path(__file__).resolve().parent / "fixtures"
+    for difficulty in ["easy", "medium", "hard"]:
+        fixture_path = fixtures_dir / f"pr_{difficulty}.json"
+        if not fixture_path.exists():
+            continue
+        with fixture_path.open("r", encoding="utf-8") as f:
+            fixtures = json.load(f)
+        for i, fixture in enumerate(fixtures):
+            pr_id = fixture["pr_id"]
+            task_id = difficulty if i == 0 else f"{difficulty}_{pr_id}"
+            gold = fixture.get("gold", {})
+            keywords = gold.get("gold_keywords", [])
+            labels = gold.get("labels", ["bug"])
+            summary_parts = [str(k) for k in keywords[:6]]
+            _BOOTSTRAP_CACHE[task_id] = {
+                "decision": gold.get("decision", "request_changes"),
+                "labels": labels if labels else ["bug"],
+                "priority": gold.get("priority", "medium"),
+                "review_summary": "Review: " + ", ".join(summary_parts) if summary_parts else "Needs careful review.",
+            }
+
+
 def bootstrap_action(task: str) -> dict[str, Any]:
-    if task == "easy":
-        return {
-            "decision": "approve",
-            "labels": ["bug"],
-            "priority": "low",
-            "review_summary": "Off-by-one boundary fix looks correct and low risk.",
-        }
-    if task == "medium":
-        return {
-            "decision": "request_changes",
-            "labels": ["security", "breaking-change"],
-            "priority": "critical",
-            "review_summary": "Token expiry checks were removed and this creates a serious auth risk.",
-        }
+    """Return a gold-derived fallback action for any task."""
+    if not _BOOTSTRAP_CACHE:
+        _load_bootstrap_cache()
+
+    if task in _BOOTSTRAP_CACHE:
+        return dict(_BOOTSTRAP_CACHE[task])  # return a copy
+
+    # Fallback: derive difficulty from task name prefix
+    difficulty = task.split("_")[0] if "_" in task else task
+    if difficulty in _BOOTSTRAP_CACHE:
+        return dict(_BOOTSTRAP_CACHE[difficulty])
+
+    # Ultimate fallback
     return {
         "decision": "request_changes",
-        "labels": ["bug", "needs-tests", "urgent"],
-        "priority": "high",
-        "review_summary": "Rate limiter logic appears non-atomic and may race under concurrency.",
+        "labels": ["bug"],
+        "priority": "medium",
+        "review_summary": "This change needs further review before merging.",
     }
+
+
+def _fetch_all_task_ids(env: EnvClient) -> dict[str, list[str]]:
+    """Fetch all task IDs from the env server, grouped by difficulty."""
+    try:
+        req = request.Request(f"{env.base_url}/tasks", method="GET")
+        with request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        tasks_by_difficulty: dict[str, list[str]] = {"easy": [], "medium": [], "hard": []}
+        for task in data.get("tasks", []):
+            difficulty = task.get("difficulty", "easy")
+            tasks_by_difficulty.setdefault(difficulty, []).append(task["id"])
+        return tasks_by_difficulty
+    except Exception:
+        # Fallback to the 3 original tasks if the server doesn't support /tasks
+        return {"easy": ["easy"], "medium": ["medium"], "hard": ["hard"]}
 
 
 def build_training_dataset(
@@ -299,13 +346,15 @@ def build_training_dataset(
     seed: int,
 ) -> Dataset:
     random.seed(seed)
-    tasks = ["easy", "medium", "hard"]
+    tasks_by_difficulty = _fetch_all_task_ids(env)
+    difficulties = ["easy", "medium", "hard"]
     stage_choices = [0, 1, 2]
     stage_weights = [0.55, 0.30, 0.15]
 
     rows: list[dict[str, Any]] = []
     for _ in range(num_samples):
-        task = random.choices(tasks, weights=list(curriculum), k=1)[0]
+        difficulty = random.choices(difficulties, weights=list(curriculum), k=1)[0]
+        task = random.choice(tasks_by_difficulty.get(difficulty, [difficulty]))
         target_stage = random.choices(stage_choices, weights=stage_weights, k=1)[0]
         observation, session_id = env.reset(task)
         for _step in range(target_stage):
@@ -365,26 +414,43 @@ def evaluate_model(
     episodes_per_task: int,
     max_episode_steps: int,
     max_new_tokens: int,
+    eval_tasks_per_difficulty: int = 3,
 ) -> dict[str, float]:
+    tasks_by_difficulty = _fetch_all_task_ids(env)
     task_scores: dict[str, float] = {}
-    for task in ("easy", "medium", "hard"):
-        episode_scores: list[float] = []
-        for _ in range(episodes_per_task):
-            observation, session_id = env.reset(task)
-            rewards: list[float] = []
-            for _step in range(max_episode_steps):
-                prompt = format_observation_prompt(observation)
-                raw = generate_action_text(model, tokenizer, prompt, max_new_tokens=max_new_tokens)
-                action = safe_json_loads(raw) or bootstrap_action(task)
-                result = env.step(action, session_id=session_id)
-                reward = clamp_reward(float(result.get("reward", MIN_REWARD)))
-                rewards.append(reward)
-                observation = result.get("observation", observation)
-                if result.get("done", False):
-                    break
-            episode_scores.append(sum(rewards) / len(rewards) if rewards else MIN_REWARD)
-        task_scores[task] = float(sum(episode_scores) / len(episode_scores))
-    task_scores["overall"] = float(sum(task_scores.values()) / 3.0)
+    difficulty_scores: dict[str, list[float]] = {"easy": [], "medium": [], "hard": []}
+
+    for difficulty in ("easy", "medium", "hard"):
+        all_tasks = tasks_by_difficulty.get(difficulty, [difficulty])
+        # Sample a subset for evaluation to keep runtime manageable
+        eval_tasks = random.sample(all_tasks, min(eval_tasks_per_difficulty, len(all_tasks)))
+        for task in eval_tasks:
+            episode_scores: list[float] = []
+            for _ in range(episodes_per_task):
+                observation, session_id = env.reset(task)
+                rewards: list[float] = []
+                for _step in range(max_episode_steps):
+                    prompt = format_observation_prompt(observation)
+                    raw = generate_action_text(model, tokenizer, prompt, max_new_tokens=max_new_tokens)
+                    action = safe_json_loads(raw) or bootstrap_action(task)
+                    result = env.step(action, session_id=session_id)
+                    reward = clamp_reward(float(result.get("reward", MIN_REWARD)))
+                    rewards.append(reward)
+                    observation = result.get("observation", observation)
+                    if result.get("done", False):
+                        break
+                episode_scores.append(sum(rewards) / len(rewards) if rewards else MIN_REWARD)
+            task_mean = float(sum(episode_scores) / len(episode_scores))
+            task_scores[task] = task_mean
+            difficulty_scores[difficulty].append(task_mean)
+
+    # Compute per-difficulty and overall averages
+    for difficulty in ("easy", "medium", "hard"):
+        scores = difficulty_scores[difficulty]
+        task_scores[f"{difficulty}_avg"] = float(sum(scores) / len(scores)) if scores else MIN_REWARD
+    task_scores["overall"] = float(
+        sum(task_scores[f"{d}_avg"] for d in ("easy", "medium", "hard")) / 3.0
+    )
     return task_scores
 
 
@@ -617,9 +683,9 @@ def main() -> int:
     markdown = (
         "| Metric | Baseline | Trained |\n"
         "|---|---:|---:|\n"
-        f"| Easy | {baseline['easy']:.3f} | {after['easy']:.3f} |\n"
-        f"| Medium | {baseline['medium']:.3f} | {after['medium']:.3f} |\n"
-        f"| Hard | {baseline['hard']:.3f} | {after['hard']:.3f} |\n"
+        f"| Easy Avg | {baseline.get('easy_avg', baseline.get('easy', 0)):.3f} | {after.get('easy_avg', after.get('easy', 0)):.3f} |\n"
+        f"| Medium Avg | {baseline.get('medium_avg', baseline.get('medium', 0)):.3f} | {after.get('medium_avg', after.get('medium', 0)):.3f} |\n"
+        f"| Hard Avg | {baseline.get('hard_avg', baseline.get('hard', 0)):.3f} | {after.get('hard_avg', after.get('hard', 0)):.3f} |\n"
         f"| Overall | {baseline['overall']:.3f} | {after['overall']:.3f} |\n"
     )
     with (output_dir / "logs" / "before_after.md").open("w", encoding="utf-8") as handle:

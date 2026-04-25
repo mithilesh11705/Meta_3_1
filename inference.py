@@ -21,7 +21,7 @@ API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("API
 MAX_STEPS = int(os.getenv("MAX_STEPS", "8"))
 MIN_SCORE = 0.01
 MAX_SCORE = 0.99
-TASKS = ("easy", "medium", "hard")
+TASKS: tuple[str, ...] | None = None  # Populated dynamically at runtime
 VALID_DECISIONS = {"approve", "request_changes", "close"}
 VALID_PRIORITIES = {"low", "medium", "high", "critical"}
 VALID_LABELS = {
@@ -262,8 +262,25 @@ def run_task(client: OpenAI, task: str) -> None:
     )
 
 
+def _fetch_tasks() -> tuple[str, ...]:
+    """Fetch all task IDs from the env server, falling back to the 3 originals."""
+    try:
+        req = request.Request(f"{ENV_BASE_URL}/tasks", method="GET")
+        with request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        task_ids = [t["id"] for t in data.get("tasks", [])]
+        if task_ids:
+            return tuple(task_ids)
+    except Exception:
+        pass
+    return ("easy", "medium", "hard")
+
+
 def main() -> int:
+    global TASKS
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    TASKS = _fetch_tasks()
+    print(f"[INFO] Running inference on {len(TASKS)} tasks")
     for task in TASKS:
         run_task(client, task)
     return 0

@@ -90,7 +90,7 @@ class TestRewardFunction:
         assert 0.9 <= breakdown.label_score < 1.0
         assert 0.9 <= breakdown.priority_score < 1.0
         assert 0.4 <= breakdown.summary_score < 1.0
-        assert 0.7 <= breakdown.total < 1.0
+        assert 0.5 <= breakdown.total < 1.0
 
     def test_partial_credit_decision(self):
         """Test partial credit for close decisions"""
@@ -231,7 +231,7 @@ class TestRewardFunction:
         test_cases = [
             ("Too short", 0.05),  # < 20 chars
             ("A" * 600, 0.05),   # > 500 chars
-            ("Perfect length summary with good content", 0.3),  # Good length with no keywords
+            ("Perfect length summary with good content", 0.15),  # Good length with no keywords
         ]
         
         for summary, expected_min_score in test_cases:

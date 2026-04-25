@@ -10,7 +10,7 @@ pinned: false
 
 # pr-review-env
 
-Deterministic OpenEnv environment for pull request triage and review quality assessment.
+Deterministic OpenEnv environment for pull request triage and review quality assessment with **100 real-world PR scenarios** across three difficulty levels.
 
 ## Theme Fit
 Primary fit: **Theme #3.1 - World Modeling (Professional Tasks)**.
@@ -47,9 +47,17 @@ Stage-aware weighted score:
 Total is clamped to strict `(0, 1)`.
 
 ## Tasks
-- `easy`: off-by-one bugfix
-- `medium`: token-expiry regression in auth flow
-- `hard`: Redis TOCTOU race condition under concurrency
+
+**100 tasks** across 3 difficulty levels:
+
+| Difficulty | Count | Max Steps | Example Scenarios |
+|---|---|---|---|
+| Easy | 30 | 4 | Typo fixes, import ordering, dead code removal, dependency pinning |
+| Medium | 35 | 6 | SQL injection, hardcoded credentials, cache invalidation, breaking API changes |
+| Hard | 35 | 8 | TOCTOU races, distributed locks, saga patterns, connection pool exhaustion |
+
+Backward-compatible task IDs: `easy`, `medium`, `hard` (first fixture per difficulty).
+All 100 tasks are accessible via `GET /tasks` or by ID (e.g. `easy_1012`, `medium_2081`).
 
 ## Quick Start
 ```bash

@@ -19,19 +19,19 @@ logger = logging.getLogger("pr-review-env")
 
 app = FastAPI(
     title="pr-review-env",
-    version="1.0.0",
+    version="2.0.0",
     description="""Pull Request Code Review Triage Environment
 
 A deterministic OpenEnv benchmark that simulates real PR review workflows across
-bugfix, security-sensitive, and contested infrastructure changes. Agents are
-evaluated on decision quality, prioritization, and review communication under
-realistic constraints.
+100 realistic scenarios spanning bugfix, security-sensitive, and contested
+infrastructure changes. Agents are evaluated on decision quality, prioritization,
+and review communication under realistic constraints.
 
 ## Features
-- Three difficulty levels with realistic PR scenarios
+- 100 PR scenarios across three difficulty levels (30 easy, 35 medium, 35 hard)
 - Dense reward function with partial credit
 - Deterministic grading without LLM calls
-- Session-based concurrent support
+- Session-based concurrent support with TTL eviction
 - Comprehensive logging and error handling
 """,
     contact={
@@ -44,7 +44,25 @@ realistic constraints.
     }
 )
 
+SESSION_TTL_SECONDS = 1800  # 30 minutes
 SESSION_STORE: dict[str, PRReviewEnv] = {}
+_SESSION_LAST_ACTIVE: dict[str, float] = {}
+
+
+def _evict_expired_sessions() -> None:
+    """Remove sessions idle longer than SESSION_TTL_SECONDS."""
+    now = time.time()
+    expired = [sid for sid, ts in _SESSION_LAST_ACTIVE.items() if now - ts > SESSION_TTL_SECONDS]
+    for sid in expired:
+        SESSION_STORE.pop(sid, None)
+        _SESSION_LAST_ACTIVE.pop(sid, None)
+    if expired:
+        logger.info(f"Evicted {len(expired)} expired sessions")
+
+
+def _touch_session(session_id: str) -> None:
+    """Update the last-active timestamp for a session."""
+    _SESSION_LAST_ACTIVE[session_id] = time.time()
 
 
 class ResetRequest(BaseModel):
@@ -58,8 +76,10 @@ def resolve_session_id(session_id: str | None = Header(default=None, alias="sess
 
 
 def get_env(session_id: str = Depends(resolve_session_id)) -> PRReviewEnv:
+    _evict_expired_sessions()
     if session_id not in SESSION_STORE:
         SESSION_STORE[session_id] = PRReviewEnv()
+    _touch_session(session_id)
     return SESSION_STORE[session_id]
 
 
@@ -103,9 +123,11 @@ def reset(
     try:
         env = SESSION_STORE.get(resolved_session_id)
         if env is None:
+            _evict_expired_sessions()
             env = PRReviewEnv()
             SESSION_STORE[resolved_session_id] = env
             logger.info(f"Created new environment for session: {resolved_session_id}")
+        _touch_session(resolved_session_id)
         
         observation = env.reset(task)
         
@@ -206,7 +228,8 @@ def health() -> dict[str, object]:
     return {
         "status": "ok",
         "environment": "pr-review-env",
-        "version": "1.0.0",
+        "version": "2.0.0",
+        "total_tasks": len(TASK_CONFIGS),
         "active_sessions": len(SESSION_STORE),
         "available_tasks": list(TASK_CONFIGS.keys()),
         "timestamp": time.time()

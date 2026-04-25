@@ -155,10 +155,11 @@ class TestPRReviewEnv:
         tasks = PRReviewEnv.tasks()
         
         assert isinstance(tasks, list)
-        assert len(tasks) == 3  # easy, medium, hard
+        assert len(tasks) == 100  # 30 easy + 35 medium + 35 hard
         
         task_ids = {task["id"] for task in tasks}
-        assert task_ids == {"easy", "medium", "hard"}
+        # Backward-compat entries still present
+        assert {"easy", "medium", "hard"}.issubset(task_ids)
         
         # Check task structure
         for task in tasks:
@@ -271,7 +272,7 @@ class TestPRReviewEnv:
     def test_task_configs_structure(self):
         """Test task configs have correct structure"""
         for task_id, config in TASK_CONFIGS.items():
-            assert task_id in ["easy", "medium", "hard"]
+            assert config.difficulty in ["easy", "medium", "hard"]
             assert hasattr(config, 'task_id')
             assert hasattr(config, 'description')
             assert hasattr(config, 'difficulty')

@@ -6,8 +6,11 @@ from typing import Any
 from .models import Action, Observation, StepResult
 from .reward import _MIN_SCORE, compute_reward_breakdown
 from .tasks.easy import FIXTURE as EASY_FIXTURE, GOLD as EASY_GOLD
+from .tasks.easy import ALL_FIXTURES as EASY_ALL_FIXTURES
 from .tasks.hard import FIXTURE as HARD_FIXTURE, GOLD as HARD_GOLD
+from .tasks.hard import ALL_FIXTURES as HARD_ALL_FIXTURES
 from .tasks.medium import FIXTURE as MEDIUM_FIXTURE, GOLD as MEDIUM_GOLD
+from .tasks.medium import ALL_FIXTURES as MEDIUM_ALL_FIXTURES
 
 
 @dataclass(frozen=True)
@@ -21,35 +24,39 @@ class TaskConfig:
     expected_score_range: tuple[float, float]
 
 
-TASK_CONFIGS: dict[str, TaskConfig] = {
-    "easy": TaskConfig(
-        task_id="easy",
-        description="Trivial off-by-one bugfix PR with straightforward approval path.",
-        difficulty="easy",
-        fixture=EASY_FIXTURE,
-        gold=EASY_GOLD,
-        max_steps=4,
-        expected_score_range=(0.01, 0.99),
-    ),
-    "medium": TaskConfig(
-        task_id="medium",
-        description="Authentication middleware refactor hiding removal of token expiry checks.",
-        difficulty="medium",
-        fixture=MEDIUM_FIXTURE,
-        gold=MEDIUM_GOLD,
-        max_steps=6,
-        expected_score_range=(0.01, 0.99),
-    ),
-    "hard": TaskConfig(
-        task_id="hard",
-        description="Redis rate limiter PR with TOCTOU race and conflicting reviewer sentiment.",
-        difficulty="hard",
-        fixture=HARD_FIXTURE,
-        gold=HARD_GOLD,
-        max_steps=8,
-        expected_score_range=(0.01, 0.99),
-    ),
-}
+_DIFFICULTY_MAX_STEPS: dict[str, int] = {"easy": 4, "medium": 6, "hard": 8}
+
+
+def _build_task_configs() -> dict[str, TaskConfig]:
+    """Build TASK_CONFIGS from all fixtures across all difficulties."""
+    configs: dict[str, TaskConfig] = {}
+
+    difficulty_fixtures = [
+        ("easy", EASY_ALL_FIXTURES),
+        ("medium", MEDIUM_ALL_FIXTURES),
+        ("hard", HARD_ALL_FIXTURES),
+    ]
+
+    for difficulty, fixtures in difficulty_fixtures:
+        max_steps = _DIFFICULTY_MAX_STEPS[difficulty]
+        for i, fixture in enumerate(fixtures):
+            pr_id = fixture["pr_id"]
+            # First fixture of each difficulty keeps the simple name for backward compat
+            task_id = difficulty if i == 0 else f"{difficulty}_{pr_id}"
+            configs[task_id] = TaskConfig(
+                task_id=task_id,
+                description=str(fixture.get("description", "")),
+                difficulty=difficulty,
+                fixture=fixture,
+                gold=dict(fixture["gold"]),
+                max_steps=max_steps,
+                expected_score_range=(0.01, 0.99),
+            )
+
+    return configs
+
+
+TASK_CONFIGS: dict[str, TaskConfig] = _build_task_configs()
 
 _REVIEW_STAGES: tuple[tuple[str, str], ...] = (
     (

@@ -16,26 +16,41 @@ _PRIORITY_ORDER: dict[str, int] = {
 _MIN_SCORE = 0.01
 _MAX_SCORE = 0.99
 
-_TASK_EVIDENCE: dict[str, dict[str, list[str]]] = {
-    "easy": {
-        "issue_terms": ["off-by-one", "inclusive", "end + 1", "slice bounds"],
-        "impact_terms": ["correctness", "bugfix", "slice", "window_slice"],
-        "remediation_terms": ["looks good", "approve", "fix", "correct"],
-        "file_terms": ["list_helpers.py", "window_slice"],
-    },
-    "medium": {
-        "issue_terms": ["token expiry", "exp", "expiry check", "session timeout"],
-        "impact_terms": ["security", "session", "vulnerability", "compromised token"],
-        "remediation_terms": ["restore", "expiry checks", "regression tests", "request changes"],
-        "file_terms": ["middleware.py", "tokens.py", "auth"],
-    },
-    "hard": {
-        "issue_terms": ["race condition", "toctou", "get then incr", "non-atomic"],
-        "impact_terms": ["redis", "concurrency", "limit bypass", "high concurrency"],
-        "remediation_terms": ["atomic", "lua", "transaction", "request changes"],
-        "file_terms": ["rate_limiter.py", "middleware.py", "redis"],
-    },
-}
+
+def _build_task_evidence() -> dict[str, dict[str, list[str]]]:
+    """Build evidence terms for all tasks from fixture gold_keywords and files_changed."""
+    import json
+    from pathlib import Path
+
+    fixtures_dir = Path(__file__).resolve().parents[1] / "fixtures"
+    evidence: dict[str, dict[str, list[str]]] = {}
+
+    for difficulty in ["easy", "medium", "hard"]:
+        fixture_path = fixtures_dir / f"pr_{difficulty}.json"
+        if not fixture_path.exists():
+            continue
+
+        with fixture_path.open("r", encoding="utf-8") as f:
+            fixtures = json.load(f)
+
+        for i, fixture in enumerate(fixtures):
+            pr_id = fixture["pr_id"]
+            task_id = difficulty if i == 0 else f"{difficulty}_{pr_id}"
+
+            keywords = [str(k).strip().lower() for k in fixture.get("gold", {}).get("gold_keywords", []) if str(k).strip()]
+            files = [str(fp).split("/")[-1].lower() for fp in fixture.get("files_changed", [])]
+
+            evidence[task_id] = {
+                "issue_terms": keywords,
+                "impact_terms": keywords,
+                "remediation_terms": keywords,
+                "file_terms": files,
+            }
+
+    return evidence
+
+
+_TASK_EVIDENCE: dict[str, dict[str, list[str]]] = _build_task_evidence()
 
 
 def _clamp(value: float) -> float:

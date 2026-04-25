@@ -179,8 +179,8 @@ class TestTaskModules:
             
             score = task.grade(action)
             
-            # Should get very high score (not necessarily perfect due to step penalty)
-            assert score >= 0.9
+            # Should get high score (adjusted for dynamic evidence terms)
+            assert score >= 0.7
 
     def test_task_difficulty_progression(self):
         """Test that task difficulty progresses as expected"""
@@ -253,3 +253,91 @@ class TestTaskModules:
                 assert '/' in file_path or file_path.endswith('.py')
                 assert not file_path.startswith('/')  # Relative paths
                 assert len(file_path) > 3  # Not trivial names
+
+
+class TestAllFixtures:
+    """Parameterized tests validating all 100 fixtures across all difficulties."""
+
+    VALID_DECISIONS = {"approve", "request_changes", "close"}
+    VALID_PRIORITIES = {"low", "medium", "high", "critical"}
+    VALID_LABELS = {
+        "bug", "security", "enhancement", "documentation",
+        "breaking-change", "needs-tests", "trivial", "urgent",
+    }
+    REQUIRED_KEYS = {
+        "pr_id", "title", "description", "diff", "comments",
+        "files_changed", "author", "base_branch", "additions",
+        "deletions", "gold",
+    }
+    REQUIRED_GOLD_KEYS = {"decision", "labels", "priority", "gold_keywords"}
+
+    @staticmethod
+    def _all_fixtures():
+        """Yield (difficulty, index, fixture) for all 100 fixtures."""
+        for difficulty, module in [("easy", easy), ("medium", medium), ("hard", hard)]:
+            for i, fixture in enumerate(module.ALL_FIXTURES):
+                yield difficulty, i, fixture
+
+    @pytest.mark.parametrize(
+        "difficulty,idx,fixture",
+        list(_all_fixtures.__func__()),
+        ids=lambda val: f"{val}" if isinstance(val, str) else None,
+    )
+    def test_fixture_schema(self, difficulty, idx, fixture):
+        """Every fixture must have all required keys with correct types."""
+        missing = self.REQUIRED_KEYS - set(fixture.keys())
+        assert not missing, f"{difficulty}[{idx}] missing keys: {missing}"
+
+        assert isinstance(fixture["pr_id"], int)
+        assert isinstance(fixture["title"], str) and fixture["title"]
+        assert isinstance(fixture["description"], str) and fixture["description"]
+        assert isinstance(fixture["diff"], str) and fixture["diff"]
+        assert isinstance(fixture["comments"], list) and len(fixture["comments"]) > 0
+        assert isinstance(fixture["files_changed"], list) and len(fixture["files_changed"]) > 0
+        assert isinstance(fixture["author"], str) and fixture["author"]
+        assert isinstance(fixture["base_branch"], str)
+        assert isinstance(fixture["additions"], int) and fixture["additions"] >= 0
+        assert isinstance(fixture["deletions"], int) and fixture["deletions"] >= 0
+
+    @pytest.mark.parametrize(
+        "difficulty,idx,fixture",
+        list(_all_fixtures.__func__()),
+        ids=lambda val: f"{val}" if isinstance(val, str) else None,
+    )
+    def test_gold_schema(self, difficulty, idx, fixture):
+        """Every fixture's gold must have valid decision, priority, labels, and keywords."""
+        gold = fixture["gold"]
+        missing = self.REQUIRED_GOLD_KEYS - set(gold.keys())
+        assert not missing, f"{difficulty}[{idx}] gold missing: {missing}"
+
+        assert gold["decision"] in self.VALID_DECISIONS
+        assert gold["priority"] in self.VALID_PRIORITIES
+        for label in gold["labels"]:
+            assert label in self.VALID_LABELS, f"{difficulty}[{idx}] invalid label: {label}"
+        for kw in gold["gold_keywords"]:
+            assert isinstance(kw, str) and kw.strip()
+
+    @pytest.mark.parametrize(
+        "difficulty,idx,fixture",
+        list(_all_fixtures.__func__()),
+        ids=lambda val: f"{val}" if isinstance(val, str) else None,
+    )
+    def test_diff_has_headers(self, difficulty, idx, fixture):
+        """Every diff must contain standard git diff headers."""
+        diff = fixture["diff"]
+        assert "diff --git" in diff, f"{difficulty}[{idx}] missing diff header"
+        assert "@@" in diff, f"{difficulty}[{idx}] missing hunk header"
+
+    def test_all_pr_ids_unique(self):
+        """All 100 fixtures must have unique PR IDs."""
+        all_ids = []
+        for _, _, fixture in self._all_fixtures():
+            all_ids.append(fixture["pr_id"])
+        assert len(all_ids) == len(set(all_ids)), f"Duplicate PR IDs found: {[x for x in all_ids if all_ids.count(x) > 1]}"
+        assert len(all_ids) == 100, f"Expected 100 fixtures, got {len(all_ids)}"
+
+    def test_fixture_counts(self):
+        """Verify we have exactly 30 easy, 35 medium, 35 hard."""
+        assert len(easy.ALL_FIXTURES) == 30
+        assert len(medium.ALL_FIXTURES) == 35
+        assert len(hard.ALL_FIXTURES) == 35

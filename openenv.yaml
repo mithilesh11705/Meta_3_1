@@ -1,6 +1,6 @@
 name: pr-review-env
-version: 1.0.0
-description: Deterministic pull request code review triage environment for evaluating decision quality, label selection, priority judgment, and review writing.
+version: 2.0.0
+description: Deterministic pull request code review triage environment for evaluating decision quality, label selection, priority judgment, and review writing across 100 real-world PR scenarios.
 author: Meta Infra Tooling
 tags:
   - code-review
@@ -38,6 +38,42 @@ action_space:
     type: str
     min_length: 1
     max_length: 500
+task_summary:
+  total: 100
+  easy: 30
+  medium: 35
+  hard: 35
+  categories:
+    - typo/documentation fixes
+    - dead code removal
+    - import ordering / style
+    - type hints / annotations
+    - dependency pinning
+    - null checks / edge cases
+    - SQL injection / XSS
+    - hardcoded credentials
+    - missing input validation
+    - CORS / rate limiting
+    - cache invalidation
+    - breaking API changes
+    - database migrations
+    - async/await bugs
+    - circular imports
+    - N+1 queries
+    - distributed locks / TTL
+    - message queue / DLQ
+    - cache stampede
+    - JWT / OAuth vulnerabilities
+    - K8s / infrastructure misconfig
+    - connection pool exhaustion
+    - cryptographic nonce reuse
+    - deserialization RCE
+    - TOCTOU race conditions
+    - saga / compensation patterns
+    - floating point in finance
+    - deadlocks / concurrency
+    - service mesh bypass
+    - deploy ordering dependencies
 tasks:
   - id: easy
     description: Off-by-one bugfix PR in list slicing helper with clear reviewer consensus.
@@ -54,6 +90,9 @@ tasks:
     difficulty: hard
     max_steps: 8
     expected_score_range: [0.05, 0.95]
+  # Additional 97 tasks are loaded dynamically from fixtures/pr_easy.json,
+  # fixtures/pr_medium.json, and fixtures/pr_hard.json.
+  # Use GET /tasks endpoint to see the full list at runtime.
 reward:
   description: Stage-aware weighted reward over decision correctness, label F1, priority distance, and evidence-grounded review summary, with contradiction penalties and a 0.02 step penalty beyond step 1, clamped strictly within (0, 1).
 baseline_scores:
