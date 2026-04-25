@@ -1,6 +1,6 @@
 ---
 title: PR Review Environment
-emoji: trophy
+emoji: 🏆
 colorFrom: green
 colorTo: indigo
 sdk: docker
