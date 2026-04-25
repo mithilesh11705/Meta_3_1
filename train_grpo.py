@@ -135,10 +135,15 @@ def _normalize_action(parsed: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def safe_json_loads(raw: str) -> dict[str, Any] | None:
+def safe_json_loads(raw: str, require_exact: bool = False) -> dict[str, Any] | None:
     candidate = _extract_first_json_object(raw)
     if not candidate:
         return None
+    if require_exact:
+        # In strict mode, reject completions that contain extra prose before/after JSON.
+        cleaned = strip_code_fences(raw)
+        if cleaned.strip() != candidate.strip():
+            return None
     try:
         parsed = json.loads(candidate)
     except json.JSONDecodeError:
@@ -429,6 +434,20 @@ def generate_action_text(model: Any, tokenizer: Any, prompt: str, max_new_tokens
     return text.strip()
 
 
+def apply_verbosity_discount(raw_output: str, base_reward: float) -> float:
+    """
+    Slightly penalize excessively long completions.
+    This discourages max-length rambling that still contains a parseable JSON prefix.
+    """
+    char_count = len(strip_code_fences(raw_output))
+    if char_count <= 360:
+        return clamp_reward(base_reward)
+    # Linearly reduce reward up to a 20% penalty for very long outputs.
+    overflow = min(char_count - 360, 640)
+    discount = 1.0 - (0.20 * (overflow / 640.0))
+    return clamp_reward(base_reward * discount)
+
+
 def evaluate_model(
     env: EnvClient,
     model: Any,
@@ -716,7 +735,7 @@ def main() -> int:
         tasks = task if isinstance(task, list) else ["easy"] * len(completions)
         for idx, completion in enumerate(completions):
             raw = extract_completion_text(completion)
-            parsed = safe_json_loads(raw)
+            parsed = safe_json_loads(raw, require_exact=args.strict_json_reward)
             if parsed is None:
                 parse_fallback_count += 1
                 if args.strict_json_reward:
@@ -727,7 +746,7 @@ def main() -> int:
             else:
                 parse_success_count += 1
             score, breakdown = env.validate(tasks[idx], parsed)
-            rewards.append(score)
+            rewards.append(apply_verbosity_discount(raw, score))
             if breakdown:
                 reward_components.append({"task": tasks[idx], **breakdown})
         mean_reward = sum(rewards) / len(rewards) if rewards else MIN_REWARD

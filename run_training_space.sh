@@ -20,6 +20,11 @@ OUTPUT_DIR="${TRAIN_OUTPUT_DIR:-/home/appuser/artifacts/grpo_hf_space_run}"
 mkdir -p "${OUTPUT_DIR}"
 
 echo "[INFO] Starting GRPO training job..."
+EXTRA_ARGS=""
+if [ "${TRAIN_SKIP_INITIAL_EVAL:-0}" = "1" ]; then
+  EXTRA_ARGS="${EXTRA_ARGS} --skip-initial-eval"
+fi
+
 python -u train_grpo.py \
   --env-base-url "${ENV_BASE_URL}" \
   --model-name "${MODEL_NAME}" \
@@ -32,12 +37,12 @@ python -u train_grpo.py \
   --episodes-per-task "${TRAIN_EPISODES_PER_TASK:-4}" \
   --max-episode-steps "${TRAIN_MAX_EPISODE_STEPS:-3}" \
   --eval-tasks-per-difficulty "${TRAIN_EVAL_TASKS_PER_DIFFICULTY:-1}" \
-  --skip-initial-eval \
   --strict-json-reward \
   --parse-failure-reward "${TRAIN_PARSE_FAILURE_REWARD:-0.01}" \
   --max-completion-length "${TRAIN_MAX_COMPLETION_LENGTH:-160}" \
   --max-new-tokens "${TRAIN_MAX_NEW_TOKENS:-160}" \
-  --output-dir "${OUTPUT_DIR}" 2>&1 || true
+  --output-dir "${OUTPUT_DIR}" \
+  ${EXTRA_ARGS} 2>&1 | tee "${OUTPUT_DIR}/training.log"
 
 echo "[INFO] Training finished. Artifacts directory: ${OUTPUT_DIR}"
 echo "[INFO] Keeping Space app alive on :7860"
