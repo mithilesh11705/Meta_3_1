@@ -1,34 +1,1119 @@
-{
-    "pr_id":  2044,
-    "title":  "Auth middleware cleanup and context shape normalization",
-    "description":  "Refactors middleware control flow to remove duplicated checks and simplify request.state.user payload fields.",
-    "diff":  "diff --git a/src/auth/middleware.py b/src/auth/middleware.py\nindex 7a1d9c3..d812b2c 100644\n--- a/src/auth/middleware.py\n+++ b/src/auth/middleware.py\n@@ -18,16 +18,6 @@ class AuthMiddleware(BaseHTTPMiddleware):\n         token = auth_header.removeprefix(\"Bearer \").strip()\n         payload: dict[str, Any] = decode_token(token)\n \n-        expires_at = payload.get(\"exp\")\n-        if expires_at is None:\n-            request.state.user = None\n-            return await call_next(request)\n-\n-        now = int(datetime.now(tz=timezone.utc).timestamp())\n-        if now \u003e= int(expires_at):\n-            request.state.user = None\n-            return await call_next(request)\n-\n         request.state.user = {\n             \"id\": payload.get(\"sub\"),\n             \"email\": payload.get(\"email\"),\n             \"roles\": payload.get(\"roles\", []),\n         }\n \n         response = await call_next(request)\n         return response\ndiff --git a/src/auth/tokens.py b/src/auth/tokens.py\nindex 9f2a3b1..e4c7d8f 100644\n--- a/src/auth/tokens.py\n+++ b/src/auth/tokens.py\n@@ -45,8 +45,6 @@ def decode_token(token: str) -\u003e dict[str, Any]:\n     except jwt.ExpiredSignatureError:\n         # Let middleware handle expiry - more flexible for different contexts\n         pass\n-    except jwt.InvalidTokenError as e:\n-        raise AuthenticationError(f\"Invalid token: {e}\")\n \n     return payload\ndiff --git a/src/auth/tokens.py b/src/auth/tokens.py\nindex 5fdc04f..6ab4d2a 100644\n--- a/src/auth/tokens.py\n+++ b/src/auth/tokens.py\n@@ -10,7 +10,10 @@ def decode_token(token: str) -\u003e dict[str, Any]:\n     payload = jwt.decode(\n         token,\n         settings.jwt_public_key,\n-        algorithms=[\"RS256\"],\n+        algorithms=[\"RS256\"],\n         audience=settings.jwt_audience,\n         options={\"verify_signature\": True},\n     )\n+\n+    # expiry check intentionally removed from middleware for performance\n+    # decode still validates crypto properties\n     return payload",
-    "comments":  [
-                     "rohan: Nice cleanup, approve from me. The token validation should be handled at the edge anyway.",
-                     "maya: \u001b[31mCRITICAL\u001b[0m: This removes token expiry enforcement! Sessions will never timeout. This is a major security regression.",
-                     "alex: I agree with maya - we need the expiry check. Without it, compromised tokens remain valid forever.",
-                     "kevin (author): The JWT library already validates expiry in decode_token, so this is just removing duplicate logic.",
-                     "security-team: Please restore expiry checks. This violates our session management policy."
-                 ],
-    "files_changed":  [
-                          "src/auth/middleware.py",
-                          "src/auth/tokens.py"
-                      ],
-    "author":  "kevin",
-    "base_branch":  "release/2026.04",
-    "additions":  22,
-    "deletions":  13,
-    "gold":  {
-                 "decision":  "request_changes",
-                 "labels":  [
-                                "security",
-                                "breaking-change"
-                            ],
-                 "priority":  "critical",
-                 "gold_keywords":  [
-                                       "token expiry",
-                                       "session",
-                                       "security risk"
-                                   ]
-             }
-}
+[
+    {
+        "pr_id": 2044,
+        "title": "Auth middleware cleanup and context shape normalization",
+        "description": "Refactors middleware control flow to remove duplicated checks and simplify request.state.user payload fields.",
+        "diff": "diff --git a/src/auth/middleware.py b/src/auth/middleware.py\nindex 7a1d9c3..d812b2c 100644\n--- a/src/auth/middleware.py\n+++ b/src/auth/middleware.py\n@@ -18,16 +18,6 @@ class AuthMiddleware(BaseHTTPMiddleware):\n         token = auth_header.removeprefix(\"Bearer \").strip()\n         payload: dict[str, Any] = decode_token(token)\n \n-        expires_at = payload.get(\"exp\")\n-        if expires_at is None:\n-            request.state.user = None\n-            return await call_next(request)\n-\n-        now = int(datetime.now(tz=timezone.utc).timestamp())\n-        if now >= int(expires_at):\n-            request.state.user = None\n-            return await call_next(request)\n-\n         request.state.user = {\n             \"id\": payload.get(\"sub\"),\n             \"email\": payload.get(\"email\"),\n             \"roles\": payload.get(\"roles\", []),\n         }\n \n         response = await call_next(request)\n         return response\ndiff --git a/src/auth/tokens.py b/src/auth/tokens.py\nindex 9f2a3b1..e4c7d8f 100644\n--- a/src/auth/tokens.py\n+++ b/src/auth/tokens.py\n@@ -45,8 +45,6 @@ def decode_token(token: str) -> dict[str, Any]:\n     except jwt.ExpiredSignatureError:\n         # Let middleware handle expiry - more flexible for different contexts\n         pass\n-    except jwt.InvalidTokenError as e:\n-        raise AuthenticationError(f\"Invalid token: {e}\")\n \n     return payload\ndiff --git a/src/auth/tokens.py b/src/auth/tokens.py\nindex 5fdc04f..6ab4d2a 100644\n--- a/src/auth/tokens.py\n+++ b/src/auth/tokens.py\n@@ -10,7 +10,10 @@ def decode_token(token: str) -> dict[str, Any]:\n     payload = jwt.decode(\n         token,\n         settings.jwt_public_key,\n-        algorithms=[\"RS256\"],\n+        algorithms=[\"RS256\"],\n         audience=settings.jwt_audience,\n         options={\"verify_signature\": True},\n     )\n+\n+    # expiry check intentionally removed from middleware for performance\n+    # decode still validates crypto properties\n     return payload",
+        "comments": [
+            "rohan: Nice cleanup, approve from me. The token validation should be handled at the edge anyway.",
+            "maya: \u001b[31mCRITICAL\u001b[0m: This removes token expiry enforcement! Sessions will never timeout. This is a major security regression.",
+            "alex: I agree with maya - we need the expiry check. Without it, compromised tokens remain valid forever.",
+            "kevin (author): The JWT library already validates expiry in decode_token, so this is just removing duplicate logic.",
+            "security-team: Please restore expiry checks. This violates our session management policy."
+        ],
+        "files_changed": [
+            "src/auth/middleware.py",
+            "src/auth/tokens.py"
+        ],
+        "author": "kevin",
+        "base_branch": "release/2026.04",
+        "additions": 22,
+        "deletions": 13,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "breaking-change"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "token expiry",
+                "session",
+                "security risk"
+            ]
+        }
+    },
+    {
+        "pr_id": 2045,
+        "title": "Add user search endpoint with raw SQL query",
+        "description": "Implements a new /api/users/search endpoint that accepts a query parameter and searches users by name using a SQL LIKE clause.",
+        "diff": "diff --git a/api/routes/users.py b/api/routes/users.py\nindex 3a4b5c6..d7e8f9a 100644\n--- a/api/routes/users.py\n+++ b/api/routes/users.py\n@@ -1,6 +1,7 @@\n from __future__ import annotations\n \n from fastapi import APIRouter, Query\n+from database import get_engine\n \n router = APIRouter(prefix=\"/api/users\")\n \n@@ -12,3 +13,15 @@ async def list_users(limit: int = 100):\n \n \n+@router.get(\"/search\")\n+async def search_users(q: str = Query(..., min_length=1)):\n+    '''Search users by name.'''\n+    engine = get_engine()\n+    with engine.connect() as conn:\n+        result = conn.execute(\n+            f\"SELECT id, name, email FROM users WHERE name LIKE '%{q}%'\"\n+        )\n+        return [{\"id\": row[0], \"name\": row[1], \"email\": row[2]} for row in result]\n",
+        "comments": [
+            "dev-anna: Looks good, works as expected in my local testing.",
+            "security-bot: WARNING: Potential SQL injection detected in users.py:22. User input is directly interpolated into SQL query.",
+            "lead-bob: This is a textbook SQL injection vulnerability. The query parameter is concatenated directly into the SQL string. Please use parameterized queries.",
+            "author-charlie: Good point, I'll switch to parameterized queries."
+        ],
+        "files_changed": [
+            "api/routes/users.py"
+        ],
+        "author": "charlie",
+        "base_branch": "develop",
+        "additions": 13,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "bug"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "SQL injection",
+                "parameterized",
+                "query",
+                "user input"
+            ]
+        }
+    },
+    {
+        "pr_id": 2046,
+        "title": "Add Redis caching layer for product catalog",
+        "description": "Introduces a Redis-backed cache for the product catalog API to reduce database load. Caches products by ID with a 5-minute TTL.",
+        "diff": "diff --git a/services/product_service.py b/services/product_service.py\nindex 4b5c6d7..e8f9a0b 100644\n--- a/services/product_service.py\n+++ b/services/product_service.py\n@@ -1,6 +1,8 @@\n from __future__ import annotations\n \n import json\n+from redis import Redis\n+\n from models.product import Product\n from repositories.product_repo import ProductRepository\n \n@@ -8,9 +10,22 @@ from repositories.product_repo import ProductRepository\n class ProductService:\n     def __init__(self, repo: ProductRepository) -> None:\n         self._repo = repo\n+        self._cache = Redis(host=\"localhost\", port=6379, db=0)\n+        self._cache_ttl = 300  # 5 minutes\n \n     def get_product(self, product_id: int) -> Product | None:\n-        return self._repo.find_by_id(product_id)\n+        cache_key = f\"product:{product_id}\"\n+        cached = self._cache.get(cache_key)\n+        if cached:\n+            return Product(**json.loads(cached))\n+\n+        product = self._repo.find_by_id(product_id)\n+        if product:\n+            self._cache.setex(cache_key, self._cache_ttl, json.dumps(product.to_dict()))\n+        return product\n \n     def update_product(self, product_id: int, data: dict) -> Product:\n-        return self._repo.update(product_id, data)\n+        updated = self._repo.update(product_id, data)\n+        # BUG: Cache is never invalidated after update!\n+        # Stale data will be served for up to 5 minutes.\n+        return updated\n",
+        "comments": [
+            "dana: Caching looks good for read-heavy workloads. Approve.",
+            "eric: Wait — the update_product method doesn't invalidate the cache. After an update, stale data will be served for up to 5 minutes. This is a correctness issue.",
+            "author-felix: We can add cache invalidation as a follow-up.",
+            "eric: No, this needs to be fixed in this PR. Serving stale data after an explicit update is a data consistency bug."
+        ],
+        "files_changed": [
+            "services/product_service.py"
+        ],
+        "author": "felix",
+        "base_branch": "main",
+        "additions": 16,
+        "deletions": 2,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "cache invalidation",
+                "stale data",
+                "consistency",
+                "update"
+            ]
+        }
+    },
+    {
+        "pr_id": 2047,
+        "title": "Simplify error handling in payment webhook",
+        "description": "Removes try/except blocks in the payment webhook handler to reduce code complexity and let errors propagate naturally.",
+        "diff": "diff --git a/webhooks/payment_handler.py b/webhooks/payment_handler.py\nindex 5c6d7e8..f9a0b1c 100644\n--- a/webhooks/payment_handler.py\n+++ b/webhooks/payment_handler.py\n@@ -12,23 +12,11 @@ logger = logging.getLogger(__name__)\n \n async def handle_payment_webhook(payload: dict[str, Any]) -> dict[str, str]:\n     '''Process incoming payment webhook from Stripe.'''\n-    try:\n-        event_type = payload.get(\"type\")\n-        if event_type == \"payment_intent.succeeded\":\n-            await process_successful_payment(payload[\"data\"])\n-        elif event_type == \"payment_intent.failed\":\n-            await process_failed_payment(payload[\"data\"])\n-        else:\n-            logger.warning(\"Unknown event type: %s\", event_type)\n-            return {\"status\": \"ignored\"}\n-    except KeyError as e:\n-        logger.error(\"Missing required field in webhook payload: %s\", e)\n-        return {\"status\": \"error\", \"message\": f\"Missing field: {e}\"}\n-    except Exception as e:\n-        logger.error(\"Webhook processing failed: %s\", e, exc_info=True)\n-        return {\"status\": \"error\", \"message\": \"Internal processing error\"}\n-\n-    return {\"status\": \"ok\"}\n+    event_type = payload.get(\"type\")\n+    if event_type == \"payment_intent.succeeded\":\n+        await process_successful_payment(payload[\"data\"])\n+    elif event_type == \"payment_intent.failed\":\n+        await process_failed_payment(payload[\"data\"])\n+    return {\"status\": \"ok\"}\n",
+        "comments": [
+            "grace: Cleaner code, LGTM.",
+            "henry: BLOCKER: Removing error handling from a payment webhook is dangerous. If payload[\"data\"] is missing, we'll get an unhandled KeyError and return a 500 to Stripe. Stripe will retry the webhook, potentially causing duplicate processing.",
+            "author-iris: The FastAPI exception handler will catch it globally.",
+            "henry: Global handlers return generic 500s. Stripe interprets that as a failure and retries. We need explicit error handling here to return proper status codes."
+        ],
+        "files_changed": [
+            "webhooks/payment_handler.py"
+        ],
+        "author": "iris",
+        "base_branch": "main",
+        "additions": 6,
+        "deletions": 14,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "breaking-change"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "error handling",
+                "webhook",
+                "payment",
+                "retry"
+            ]
+        }
+    },
+    {
+        "pr_id": 2048,
+        "title": "Add user-generated content rendering with Markdown",
+        "description": "Renders user profile bios as HTML using markdown conversion for richer formatting support.",
+        "diff": "diff --git a/templates/profile.py b/templates/profile.py\nindex 6d7e8f9..a0b1c2d 100644\n--- a/templates/profile.py\n+++ b/templates/profile.py\n@@ -1,12 +1,14 @@\n from __future__ import annotations\n \n+import markdown\n from jinja2 import Markup\n \n \n def render_profile(user: dict) -> str:\n     '''Render user profile HTML.'''\n     name = user.get(\"name\", \"Unknown\")\n-    bio = user.get(\"bio\", \"\")\n+    raw_bio = user.get(\"bio\", \"\")\n+    bio = Markup(markdown.markdown(raw_bio))\n \n     return f'''\n     <div class=\"profile\">\n",
+        "comments": [
+            "jay: Nice, markdown bios look great.",
+            "security-kate: CRITICAL: This is an XSS vulnerability. User-supplied markdown is converted to HTML and marked as safe via Markup() without any sanitization. A user could inject <script> tags in their bio.",
+            "author-leo: Can't users only write markdown?",
+            "security-kate: Markdown allows raw HTML. A bio like `<script>alert('xss')</script>` would execute in every visitor's browser. Use bleach or a sanitizer."
+        ],
+        "files_changed": [
+            "templates/profile.py"
+        ],
+        "author": "leo",
+        "base_branch": "main",
+        "additions": 4,
+        "deletions": 1,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "bug"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "XSS",
+                "cross-site scripting",
+                "sanitize",
+                "Markup"
+            ]
+        }
+    },
+    {
+        "pr_id": 2049,
+        "title": "Add new 'status' column to orders table",
+        "description": "Adds a migration to introduce a 'status' column to the orders table for tracking order lifecycle states.",
+        "diff": "diff --git a/migrations/versions/003_add_order_status.py b/migrations/versions/003_add_order_status.py\nnew file mode 100644\nindex 0000000..a1b2c3d\n--- /dev/null\n+++ b/migrations/versions/003_add_order_status.py\n@@ -0,0 +1,18 @@\n+\"\"\"Add status column to orders table\"\"\"\n+\n+from alembic import op\n+import sqlalchemy as sa\n+\n+revision = '003'\n+down_revision = '002'\n+\n+\n+def upgrade():\n+    op.add_column('orders', sa.Column('status', sa.String(50), nullable=False, server_default='pending'))\n+    op.create_index('ix_orders_status', 'orders', ['status'])\n+\n+\n+def downgrade():\n+    # WARNING: This will drop the column and all its data!\n+    pass\n+\n",
+        "comments": [
+            "mike: The upgrade looks fine but downgrade() is empty. If we need to roll back this migration in production, it won't undo anything.",
+            "nina: Agree with mike — we need a proper downgrade that drops the column and index. Without it, our migration chain is broken.",
+            "author-oscar: I wasn't sure how to handle data loss on downgrade so I left it empty.",
+            "mike: At minimum, drop the index and column. Add a comment about data loss risk."
+        ],
+        "files_changed": [
+            "migrations/versions/003_add_order_status.py"
+        ],
+        "author": "oscar",
+        "base_branch": "main",
+        "additions": 18,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "breaking-change",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "migration",
+                "rollback",
+                "downgrade",
+                "database"
+            ]
+        }
+    },
+    {
+        "pr_id": 2050,
+        "title": "Add detailed request logging for debugging",
+        "description": "Adds comprehensive request logging including headers, query params, and request body for debugging production issues.",
+        "diff": "diff --git a/middleware/debug_logger.py b/middleware/debug_logger.py\nnew file mode 100644\nindex 0000000..b2c3d4e\n--- /dev/null\n+++ b/middleware/debug_logger.py\n@@ -0,0 +1,28 @@\n+from __future__ import annotations\n+\n+import json\n+import logging\n+\n+from fastapi import Request\n+\n+logger = logging.getLogger(\"debug\")\n+\n+\n+async def log_request(request: Request, call_next):\n+    '''Log full request details for debugging.'''\n+    body = await request.body()\n+    \n+    logger.info(\n+        \"Request: %s %s\\nHeaders: %s\\nBody: %s\\nQuery: %s\",\n+        request.method,\n+        request.url.path,\n+        dict(request.headers),\n+        body.decode(\"utf-8\", errors=\"replace\"),\n+        dict(request.query_params),\n+    )\n+    \n+    response = await call_next(request)\n+    return response\n",
+        "comments": [
+            "pat: This is very useful for debugging. Approve.",
+            "compliance-quinn: BLOCKER: This logs ALL request headers and bodies. That includes Authorization tokens, session cookies, passwords in login requests, and any PII in request bodies. This violates our data handling policy and potentially GDPR.",
+            "author-rachel: I can add a filter for sensitive headers.",
+            "compliance-quinn: We need a comprehensive allowlist approach, not a denylist. Filter headers to a safe set and redact or hash body fields."
+        ],
+        "files_changed": [
+            "middleware/debug_logger.py"
+        ],
+        "author": "rachel",
+        "base_branch": "develop",
+        "additions": 28,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "PII",
+                "logging",
+                "sensitive data",
+                "GDPR"
+            ]
+        }
+    },
+    {
+        "pr_id": 2051,
+        "title": "Add feature flag for new checkout flow",
+        "description": "Wraps the new checkout flow behind a feature flag so it can be gradually rolled out.",
+        "diff": "diff --git a/features/checkout.py b/features/checkout.py\nindex 7e8f9a0..b1c2d3e 100644\n--- a/features/checkout.py\n+++ b/features/checkout.py\n@@ -1,10 +1,17 @@\n from __future__ import annotations\n \n+from features.flags import get_flag\n+\n \n def get_checkout_handler(user_id: int):\n     '''Return the appropriate checkout handler for the user.'''\n-    return ClassicCheckout()\n+    flag_value = get_flag(\"new_checkout_flow\")\n+    \n+    if flag_value:\n+        return NewCheckout(user_id)\n+    \n+    return ClassicCheckout()\n \n \n+# NOTE: get_flag returns None when the flag doesn't exist in the database.\n+# When flag_value is None, the if-check treats it as falsy, falling through\n+# to ClassicCheckout. But what if the flag service is DOWN?\n",
+        "comments": [
+            "sam: Looks good, clean feature flag usage.",
+            "tara: What happens if the flag service is unreachable? get_flag will raise a ConnectionError and the entire checkout will crash. We need a default fallback value when the flag service is down.",
+            "author-uri: I assumed the flag service is always available.",
+            "tara: Flag services go down. Please add a try/except with a default_value parameter."
+        ],
+        "files_changed": [
+            "features/checkout.py"
+        ],
+        "author": "uri",
+        "base_branch": "main",
+        "additions": 11,
+        "deletions": 1,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "feature flag",
+                "fallback",
+                "default",
+                "error handling"
+            ]
+        }
+    },
+    {
+        "pr_id": 2052,
+        "title": "Remove deprecated v1 API routes",
+        "description": "Removes the v1 API routes as announced in the deprecation notice from Q3 2025. All clients should have migrated to v2.",
+        "diff": "diff --git a/api/router.py b/api/router.py\nindex 8f9a0b1..c2d3e4f 100644\n--- a/api/router.py\n+++ b/api/router.py\n@@ -5,15 +5,8 @@ from api.v2 import router as v2_router\n \n app_router = APIRouter()\n \n-# V1 routes (deprecated since Q3 2025)\n-app_router.include_router(\n-    v1_router,\n-    prefix=\"/api/v1\",\n-    tags=[\"v1-deprecated\"]\n-)\n-\n-# V2 routes (current)\n+# V2 routes\n app_router.include_router(\n     v2_router,\n     prefix=\"/api/v2\",\n     tags=[\"v2\"]\n )\n",
+        "comments": [
+            "vera: We announced this deprecation 6 months ago. Approve.",
+            "walt: Wait — our mobile app v3.2.x still hits /api/v1/auth/token. We can't remove v1 until v3.2.x is below 5% of traffic.",
+            "xena: Analytics shows v1 still gets ~12% of total API traffic. Removing now will break those clients.",
+            "author-yuri: I thought all clients migrated. Let me check the analytics."
+        ],
+        "files_changed": [
+            "api/router.py"
+        ],
+        "author": "yuri",
+        "base_branch": "main",
+        "additions": 2,
+        "deletions": 9,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "breaking-change"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "API versioning",
+                "backward compatibility",
+                "deprecation",
+                "breaking"
+            ]
+        }
+    },
+    {
+        "pr_id": 2053,
+        "title": "Add user registration endpoint",
+        "description": "Adds a POST /api/register endpoint that creates new user accounts with email and password.",
+        "diff": "diff --git a/api/routes/auth.py b/api/routes/auth.py\nindex 9a0b1c2..d3e4f5a 100644\n--- a/api/routes/auth.py\n+++ b/api/routes/auth.py\n@@ -1,6 +1,8 @@\n from __future__ import annotations\n \n-from fastapi import APIRouter\n+from fastapi import APIRouter, HTTPException\n+from pydantic import BaseModel\n+\n from services.user_service import UserService\n \n router = APIRouter(prefix=\"/api\")\n@@ -10,3 +12,20 @@ user_service = UserService()\n \n+class RegisterRequest(BaseModel):\n+    email: str\n+    password: str\n+    name: str\n+\n+\n+@router.post(\"/register\")\n+async def register(body: RegisterRequest):\n+    '''Register a new user account.'''\n+    user = user_service.create_user(\n+        email=body.email,\n+        password=body.password,\n+        name=body.name,\n+    )\n+    return {\"id\": user.id, \"email\": user.email}\n",
+        "comments": [
+            "adam: Works for me, tested locally. Approve.",
+            "beth: There's no input validation on the email or password fields. Pydantic's str type accepts anything. We need email format validation, password length/complexity requirements, and rate limiting to prevent abuse.",
+            "carl: Also no CSRF protection or email verification step.",
+            "author-dana: I'll add validation in a follow-up PR.",
+            "beth: Registration without input validation shouldn't ship. Please add at minimum email regex and password length check."
+        ],
+        "files_changed": [
+            "api/routes/auth.py"
+        ],
+        "author": "dana",
+        "base_branch": "develop",
+        "additions": 18,
+        "deletions": 1,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "bug"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "input validation",
+                "registration",
+                "email",
+                "password"
+            ]
+        }
+    },
+    {
+        "pr_id": 2054,
+        "title": "Refactor UserService: rename get_user to find_user",
+        "description": "Renames the public get_user method to find_user across the codebase for consistency with the repository layer naming convention.",
+        "diff": "diff --git a/services/user_service.py b/services/user_service.py\nindex 1b2c3d4..e5f6a7b 100644\n--- a/services/user_service.py\n+++ b/services/user_service.py\n@@ -12,7 +12,7 @@ class UserService:\n     def __init__(self, repo: UserRepository | None = None) -> None:\n         self._repo = repo or UserRepository()\n \n-    def get_user(self, user_id: int) -> User | None:\n+    def find_user(self, user_id: int) -> User | None:\n         '''Fetch a user by ID.'''\n         return self._repo.find_by_id(user_id)\n \ndiff --git a/api/routes/users.py b/api/routes/users.py\nindex 3c4d5e6..f7a8b9c 100644\n--- a/api/routes/users.py\n+++ b/api/routes/users.py\n@@ -8,7 +8,7 @@ service = UserService()\n @router.get(\"/users/{user_id}\")\n async def get_user(user_id: int):\n-    user = service.get_user(user_id)\n+    user = service.find_user(user_id)\n     if not user:\n         raise HTTPException(status_code=404)\n     return user\n",
+        "comments": [
+            "eric: The rename makes sense for internal consistency.",
+            "fay: But get_user is part of our public SDK. External consumers import UserService and call get_user(). This rename will break all SDK users. We need a deprecation period or at least an alias.",
+            "author-greg: I didn't realize it was in the SDK. Let me add a deprecated alias.",
+            "fay: Please add the alias with a deprecation warning, and add tests for both method names."
+        ],
+        "files_changed": [
+            "services/user_service.py",
+            "api/routes/users.py"
+        ],
+        "author": "greg",
+        "base_branch": "main",
+        "additions": 2,
+        "deletions": 2,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "breaking-change",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "public API",
+                "rename",
+                "breaking change",
+                "SDK"
+            ]
+        }
+    },
+    {
+        "pr_id": 2055,
+        "title": "Add retry logic to external API client",
+        "description": "Adds automatic retry with a fixed 1-second delay for failed HTTP requests to the partner API.",
+        "diff": "diff --git a/clients/partner_api.py b/clients/partner_api.py\nindex 2d3e4f5..a6b7c8d 100644\n--- a/clients/partner_api.py\n+++ b/clients/partner_api.py\n@@ -1,6 +1,7 @@\n from __future__ import annotations\n \n import logging\n+import time\n \n import requests\n \n@@ -12,6 +13,17 @@ class PartnerAPIClient:\n     def __init__(self, base_url: str, api_key: str) -> None:\n         self._base_url = base_url\n         self._api_key = api_key\n+        self._max_retries = 3\n \n     def fetch_data(self, endpoint: str) -> dict:\n-        resp = requests.get(f\"{self._base_url}/{endpoint}\", headers={\"X-API-Key\": self._api_key})\n-        resp.raise_for_status()\n-        return resp.json()\n+        last_error = None\n+        for attempt in range(self._max_retries):\n+            try:\n+                resp = requests.get(f\"{self._base_url}/{endpoint}\", headers={\"X-API-Key\": self._api_key})\n+                resp.raise_for_status()\n+                return resp.json()\n+            except requests.RequestException as e:\n+                last_error = e\n+                time.sleep(1)  # Fixed 1-second delay\n+                logger.warning(\"Retry %d/%d for %s: %s\", attempt + 1, self._max_retries, endpoint, e)\n+        raise last_error\n",
+        "comments": [
+            "helen: Retry logic looks solid. Approve.",
+            "ivan: The fixed 1-second delay is problematic. Without exponential backoff and jitter, all failing clients will hammer the partner API at exactly the same 1-second intervals (thundering herd). We should use exponential backoff with random jitter.",
+            "jane: Also, this retries on ALL errors including 400/401/403 which are not transient. Only retry on 429, 500, 502, 503.",
+            "author-karl: Good points. I'll add backoff + jitter and filter retryable status codes."
+        ],
+        "files_changed": [
+            "clients/partner_api.py"
+        ],
+        "author": "karl",
+        "base_branch": "main",
+        "additions": 14,
+        "deletions": 3,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "retry",
+                "backoff",
+                "jitter",
+                "thundering herd"
+            ]
+        }
+    },
+    {
+        "pr_id": 2056,
+        "title": "Add file upload endpoint for user avatars",
+        "description": "Adds a POST /api/users/{id}/avatar endpoint to upload profile pictures. Files are stored in the local uploads directory.",
+        "diff": "diff --git a/api/routes/avatars.py b/api/routes/avatars.py\nnew file mode 100644\nindex 0000000..c3d4e5f\n--- /dev/null\n+++ b/api/routes/avatars.py\n@@ -0,0 +1,22 @@\n+from __future__ import annotations\n+\n+import os\n+from fastapi import APIRouter, UploadFile, File\n+\n+router = APIRouter()\n+\n+UPLOAD_DIR = \"uploads/avatars\"\n+\n+\n+@router.post(\"/api/users/{user_id}/avatar\")\n+async def upload_avatar(user_id: int, file: UploadFile = File(...)):\n+    '''Upload a user avatar image.'''\n+    os.makedirs(UPLOAD_DIR, exist_ok=True)\n+    \n+    file_path = os.path.join(UPLOAD_DIR, f\"{user_id}_{file.filename}\")\n+    \n+    contents = await file.read()\n+    with open(file_path, \"wb\") as f:\n+        f.write(contents)\n+    \n+    return {\"status\": \"uploaded\", \"path\": file_path}\n",
+        "comments": [
+            "lily: Simple and works. Approve.",
+            "mike: Several issues: 1) No file size limit - a 10GB upload will exhaust server memory since we read() the entire file into memory. 2) No file type validation - could upload .exe files. 3) Path traversal risk: filename is user-controlled, could include '../'. 4) No authentication check.",
+            "author-nina: I thought FastAPI has default size limits?",
+            "mike: FastAPI/Starlette has no default size limit for file uploads. Please add max_size validation and file type checking."
+        ],
+        "files_changed": [
+            "api/routes/avatars.py"
+        ],
+        "author": "nina",
+        "base_branch": "develop",
+        "additions": 22,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "bug"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "file upload",
+                "size limit",
+                "validation",
+                "path traversal"
+            ]
+        }
+    },
+    {
+        "pr_id": 2057,
+        "title": "Add database configuration from environment",
+        "description": "Adds database configuration loading from environment variables with fallback defaults for local development.",
+        "diff": "diff --git a/config/database.py b/config/database.py\nnew file mode 100644\nindex 0000000..d4e5f6a\n--- /dev/null\n+++ b/config/database.py\n@@ -0,0 +1,16 @@\n+from __future__ import annotations\n+\n+import os\n+\n+\n+DB_CONFIG = {\n+    \"host\": os.getenv(\"DB_HOST\", \"localhost\"),\n+    \"port\": int(os.getenv(\"DB_PORT\", \"5432\")),\n+    \"name\": os.getenv(\"DB_NAME\", \"myapp\"),\n+    \"user\": os.getenv(\"DB_USER\", \"admin\"),\n+    \"password\": os.getenv(\"DB_PASSWORD\", \"admin123\"),\n+}\n+\n+\n+def get_dsn() -> str:\n+    return f\"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['name']}\"\n",
+        "comments": [
+            "oscar: Clean setup, approve.",
+            "security-pat: CRITICAL: The default password 'admin123' is hardcoded in the source file. Even though it's a fallback, this file will be committed to git. Anyone with repo access knows the default credentials. The DSN construction also concatenates the password without URL encoding.",
+            "author-quinn: It's just for local development, not production.",
+            "security-pat: Doesn't matter — it sets a dangerous precedent and will likely be copy-pasted. Remove default credentials entirely and require explicit env vars."
+        ],
+        "files_changed": [
+            "config/database.py"
+        ],
+        "author": "quinn",
+        "base_branch": "main",
+        "additions": 16,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "hardcoded",
+                "credentials",
+                "password",
+                "secret"
+            ]
+        }
+    },
+    {
+        "pr_id": 2058,
+        "title": "Add real-time event streaming with SSE",
+        "description": "Implements Server-Sent Events for real-time dashboard updates. Creates an event emitter that tracks connected clients.",
+        "diff": "diff --git a/events/sse_manager.py b/events/sse_manager.py\nnew file mode 100644\nindex 0000000..e5f6a7b\n--- /dev/null\n+++ b/events/sse_manager.py\n@@ -0,0 +1,30 @@\n+from __future__ import annotations\n+\n+import asyncio\n+from typing import AsyncGenerator\n+\n+\n+class SSEManager:\n+    def __init__(self) -> None:\n+        self._clients: list[asyncio.Queue] = []\n+\n+    def connect(self) -> asyncio.Queue:\n+        queue = asyncio.Queue()\n+        self._clients.append(queue)\n+        return queue\n+\n+    # NOTE: No disconnect method! Clients are never removed from self._clients.\n+    # This is a memory leak — every SSE connection adds a queue that is never cleaned up.\n+\n+    async def broadcast(self, event: str, data: str) -> None:\n+        for client in self._clients:\n+            await client.put(f\"event: {event}\\ndata: {data}\\n\\n\")\n+\n+    async def event_stream(self) -> AsyncGenerator[str, None]:\n+        queue = self.connect()\n+        try:\n+            while True:\n+                data = await queue.get()\n+                yield data\n+        except asyncio.CancelledError:\n+            pass\n+            # Queue is still in self._clients after disconnect!\n",
+        "comments": [
+            "rachel: Nice SSE implementation! Approve.",
+            "sam: Memory leak: there's no disconnect() method. When a client disconnects, the asyncio.Queue stays in self._clients forever. Over time with many connections, this will consume increasing memory and slow down broadcasts.",
+            "author-tara: Good catch, I'll add a disconnect method.",
+            "sam: Please add disconnect() and call it in event_stream's finally block."
+        ],
+        "files_changed": [
+            "events/sse_manager.py"
+        ],
+        "author": "tara",
+        "base_branch": "develop",
+        "additions": 30,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "memory leak",
+                "event listener",
+                "disconnect",
+                "cleanup"
+            ]
+        }
+    },
+    {
+        "pr_id": 2059,
+        "title": "Switch password hashing from bcrypt to MD5 for performance",
+        "description": "Replaces bcrypt password hashing with MD5 to improve login latency. Bcrypt's intentional slowness was causing p95 login times of 400ms.",
+        "diff": "diff --git a/auth/password.py b/auth/password.py\nindex 3e4f5a6..b7c8d9e 100644\n--- a/auth/password.py\n+++ b/auth/password.py\n@@ -1,14 +1,14 @@\n from __future__ import annotations\n \n-import bcrypt\n+import hashlib\n \n \n def hash_password(plain: str) -> str:\n-    '''Hash a password using bcrypt with automatic salt.'''\n-    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()\n+    '''Hash a password using MD5 for fast verification.'''\n+    return hashlib.md5(plain.encode()).hexdigest()\n \n \n def verify_password(plain: str, hashed: str) -> bool:\n-    '''Verify a password against its bcrypt hash.'''\n-    return bcrypt.checkpw(plain.encode(), hashed.encode())\n+    '''Verify a password against its MD5 hash.'''\n+    return hashlib.md5(plain.encode()).hexdigest() == hashed\n",
+        "comments": [
+            "uri: 4x latency improvement on login. Approve.",
+            "security-vera: CRITICAL SECURITY REGRESSION: MD5 is cryptographically broken for password hashing. It has no salt, is vulnerable to rainbow tables, and can be brute-forced at billions of hashes per second on modern GPUs. This is a massive downgrade from bcrypt.",
+            "walt: Strongly agree with vera. If this ships, a database breach would expose all passwords within hours.",
+            "author-xena: But the latency improvement is significant...",
+            "security-vera: Use bcrypt with reduced work factor (e.g., rounds=10 instead of 12) if latency is a concern. Never use MD5 for passwords."
+        ],
+        "files_changed": [
+            "auth/password.py"
+        ],
+        "author": "xena",
+        "base_branch": "main",
+        "additions": 5,
+        "deletions": 5,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "breaking-change"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "password hashing",
+                "MD5",
+                "bcrypt",
+                "downgrade"
+            ]
+        }
+    },
+    {
+        "pr_id": 2060,
+        "title": "Add global config singleton for settings",
+        "description": "Creates a singleton pattern for application settings to avoid passing config objects through the call stack.",
+        "diff": "diff --git a/config/settings.py b/config/settings.py\nindex 4f5a6b7..c8d9e0f 100644\n--- a/config/settings.py\n+++ b/config/settings.py\n@@ -1,10 +1,22 @@\n from __future__ import annotations\n \n import os\n-from dataclasses import dataclass\n \n \n-@dataclass(frozen=True)\n-class Settings:\n-    debug: bool = False\n-    database_url: str = os.getenv(\"DATABASE_URL\", \"sqlite:///dev.db\")\n+class Settings:\n+    _instance = None\n+\n+    def __new__(cls):\n+        if cls._instance is None:\n+            cls._instance = super().__new__(cls)\n+            cls._instance.debug = os.getenv(\"DEBUG\", \"false\").lower() == \"true\"\n+            cls._instance.database_url = os.getenv(\"DATABASE_URL\", \"sqlite:///dev.db\")\n+        return cls._instance\n+\n+    @classmethod\n+    def reset(cls):\n+        cls._instance = None\n+\n+\n+def get_settings() -> Settings:\n+    return Settings()\n",
+        "comments": [
+            "yuri: Clean singleton pattern. Approve.",
+            "zara: This singleton is not thread-safe. In a multi-threaded ASGI server like uvicorn with workers, two threads could both see _instance as None and create separate instances with potentially different config values. Use threading.Lock or a module-level instance.",
+            "author-adam: uvicorn uses async, not threads.",
+            "zara: uvicorn --workers uses multiprocessing, but gunicorn --threads or running with thread pools makes this racy. Also, the reset() method creates test ordering issues."
+        ],
+        "files_changed": [
+            "config/settings.py"
+        ],
+        "author": "adam",
+        "base_branch": "main",
+        "additions": 15,
+        "deletions": 5,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "thread-safe",
+                "singleton",
+                "race condition",
+                "concurrency"
+            ]
+        }
+    },
+    {
+        "pr_id": 2061,
+        "title": "Remove rate limiting from public endpoint",
+        "description": "Removes rate limiting from /api/public endpoints to allow unrestricted access for monitoring.",
+        "diff": "diff --git a/middleware/rate_limit.py b/middleware/rate_limit.py\nindex 5a6b7c8..d9e0f1a 100644\n--- a/middleware/rate_limit.py\n+++ b/middleware/rate_limit.py\n@@ -8,7 +8,7 @@ RATE_LIMIT = 100\n \n-EXEMPT_PATHS = {\"/health\", \"/ready\"}\n+EXEMPT_PATHS = {\"/health\", \"/ready\", \"/api/public\"}\n \n class RateLimitMiddleware(BaseHTTPMiddleware):\n     async def dispatch(self, request, call_next):\n-        if request.url.path in EXEMPT_PATHS:\n+        if request.url.path in EXEMPT_PATHS or request.url.path.startswith(\"/api/public\"):\n             return await call_next(request)\n",
+        "comments": [
+            "beth: Simplifies monitoring. Approve.",
+            "security-carl: Exempting /api/public/* from rate limiting enables DDoS and enumeration attacks.",
+            "author-dana: Public endpoints are read-only.",
+            "security-carl: Read-only endpoints still allow resource exhaustion."
+        ],
+        "files_changed": [
+            "middleware/rate_limit.py"
+        ],
+        "author": "dana",
+        "base_branch": "main",
+        "additions": 3,
+        "deletions": 2,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "breaking-change"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "rate limiting",
+                "public endpoint",
+                "DDoS",
+                "abuse"
+            ]
+        }
+    },
+    {
+        "pr_id": 2062,
+        "title": "Improve API error messages with stack traces",
+        "description": "Enhances error responses to include Python stack traces for easier debugging.",
+        "diff": "diff --git a/api/error_handler.py b/api/error_handler.py\nindex 6b7c8d9..e0f1a2b 100644\n--- a/api/error_handler.py\n+++ b/api/error_handler.py\n@@ -1,5 +1,6 @@\n from __future__ import annotations\n \n+import traceback\n from fastapi import Request\n from fastapi.responses import JSONResponse\n \n@@ -8,6 +9,7 @@ async def handle_exception(request: Request, exc: Exception):\n     return JSONResponse(\n         status_code=500,\n         content={\n             \"error\": str(exc),\n+            \"traceback\": traceback.format_exc(),\n+            \"request_path\": str(request.url),\n         },\n     )\n",
+        "comments": [
+            "eric: Helpful for debugging. Approve.",
+            "fay: Stack traces in API responses expose internal implementation details to attackers — file paths, library versions, variable names. This is an information disclosure vulnerability.",
+            "author-greg: We only use this in dev.",
+            "fay: This handler is registered globally. Guard it with a DEBUG check at minimum."
+        ],
+        "files_changed": [
+            "api/error_handler.py"
+        ],
+        "author": "greg",
+        "base_branch": "main",
+        "additions": 3,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "error message",
+                "stack trace",
+                "information disclosure",
+                "internals"
+            ]
+        }
+    },
+    {
+        "pr_id": 2063,
+        "title": "Add dark mode toggle to settings page",
+        "description": "Implements a dark mode toggle that persists the user preference in localStorage and applies CSS custom properties for theme switching.",
+        "diff": "diff --git a/static/js/theme.js b/static/js/theme.js\nnew file mode 100644\nindex 0000000..f1a2b3c\n--- /dev/null\n+++ b/static/js/theme.js\n@@ -0,0 +1,20 @@\n+const THEME_KEY = 'preferred-theme';\n+\n+function getTheme() {\n+  return localStorage.getItem(THEME_KEY) || 'light';\n+}\n+\n+function setTheme(theme) {\n+  localStorage.setItem(THEME_KEY, theme);\n+  document.documentElement.setAttribute('data-theme', theme);\n+}\n+\n+function toggleTheme() {\n+  const current = getTheme();\n+  setTheme(current === 'light' ? 'dark' : 'light');\n+}\n+\n+// Apply saved theme on load\n+document.addEventListener('DOMContentLoaded', () => {\n+  setTheme(getTheme());\n+});\ndiff --git a/static/css/theme.css b/static/css/theme.css\nnew file mode 100644\nindex 0000000..a2b3c4d\n--- /dev/null\n+++ b/static/css/theme.css\n@@ -0,0 +1,16 @@\n+:root {\n+  --bg-primary: #ffffff;\n+  --text-primary: #1a1a2e;\n+}\n+\n+[data-theme='dark'] {\n+  --bg-primary: #1a1a2e;\n+  --text-primary: #e0e0e0;\n+}\n",
+        "comments": [
+            "henry: Clean implementation, LGTM!",
+            "irene: Approve — good use of CSS custom properties."
+        ],
+        "files_changed": [
+            "static/js/theme.js",
+            "static/css/theme.css"
+        ],
+        "author": "jack",
+        "base_branch": "main",
+        "additions": 36,
+        "deletions": 0,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "dark mode",
+                "toggle",
+                "theme",
+                "CSS"
+            ]
+        }
+    },
+    {
+        "pr_id": 2064,
+        "title": "Extract string utilities into shared module",
+        "description": "Moves duplicated string helper functions from three different modules into a single shared utils.strings module.",
+        "diff": "diff --git a/utils/strings.py b/utils/strings.py\nnew file mode 100644\nindex 0000000..b3c4d5e\n--- /dev/null\n+++ b/utils/strings.py\n@@ -0,0 +1,18 @@\n+from __future__ import annotations\n+\n+\n+def slugify(text: str) -> str:\n+    return text.lower().strip().replace(' ', '-')\n+\n+\n+def truncate(text: str, max_length: int = 100) -> str:\n+    if len(text) <= max_length:\n+        return text\n+    return text[:max_length - 3] + '...'\n+\n+\n+def camel_to_snake(name: str) -> str:\n+    import re\n+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\\1_\\2', name)\n+    return re.sub('([a-z0-9])([A-Z])', r'\\1_\\2', s1).lower()\n",
+        "comments": [
+            "kate: Good DRY cleanup. Approve.",
+            "leo: LGTM, all callers updated correctly."
+        ],
+        "files_changed": [
+            "utils/strings.py"
+        ],
+        "author": "mike",
+        "base_branch": "main",
+        "additions": 18,
+        "deletions": 0,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "refactor",
+                "extract",
+                "utility",
+                "DRY"
+            ]
+        }
+    },
+    {
+        "pr_id": 2065,
+        "title": "Add pagination to GET /api/orders endpoint",
+        "description": "Adds cursor-based pagination to the orders listing endpoint with configurable page size.",
+        "diff": "diff --git a/api/routes/orders.py b/api/routes/orders.py\nindex 7c8d9e0..f1a2b3c 100644\n--- a/api/routes/orders.py\n+++ b/api/routes/orders.py\n@@ -1,12 +1,28 @@\n from __future__ import annotations\n \n-from fastapi import APIRouter\n+from fastapi import APIRouter, Query\n from services.order_service import OrderService\n \n router = APIRouter(prefix=\"/api\")\n service = OrderService()\n \n \n @router.get(\"/orders\")\n-async def list_orders():\n-    return service.list_all()\n+async def list_orders(\n+    cursor: str | None = Query(None),\n+    limit: int = Query(20, ge=1, le=100),\n+):\n+    orders, next_cursor = service.list_paginated(cursor=cursor, limit=limit)\n+    return {\n+        \"orders\": orders,\n+        \"next_cursor\": next_cursor,\n+        \"has_more\": next_cursor is not None,\n+    }\n",
+        "comments": [
+            "nina: Clean cursor pagination implementation. Approve.",
+            "oscar: LGTM, please add integration tests for edge cases (empty results, last page)."
+        ],
+        "files_changed": [
+            "api/routes/orders.py"
+        ],
+        "author": "pat",
+        "base_branch": "main",
+        "additions": 14,
+        "deletions": 3,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement",
+                "needs-tests"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "pagination",
+                "cursor",
+                "list",
+                "endpoint"
+            ]
+        }
+    },
+    {
+        "pr_id": 2066,
+        "title": "Add /healthz endpoint with dependency checks",
+        "description": "Adds a comprehensive health check endpoint that verifies database and Redis connectivity.",
+        "diff": "diff --git a/api/routes/health.py b/api/routes/health.py\nnew file mode 100644\nindex 0000000..c4d5e6f\n--- /dev/null\n+++ b/api/routes/health.py\n@@ -0,0 +1,22 @@\n+from __future__ import annotations\n+\n+from fastapi import APIRouter\n+from database import get_session\n+from cache import get_redis\n+\n+router = APIRouter()\n+\n+\n+@router.get(\"/healthz\")\n+async def health_check():\n+    checks = {}\n+    try:\n+        get_session().execute(\"SELECT 1\")\n+        checks[\"database\"] = \"ok\"\n+    except Exception:\n+        checks[\"database\"] = \"error\"\n+    try:\n+        get_redis().ping()\n+        checks[\"redis\"] = \"ok\"\n+    except Exception:\n+        checks[\"redis\"] = \"error\"\n+    status = \"healthy\" if all(v == \"ok\" for v in checks.values()) else \"degraded\"\n+    return {\"status\": status, \"checks\": checks}\n",
+        "comments": [
+            "quinn: Clean health check. Approve.",
+            "rachel: LGTM, good dependency verification."
+        ],
+        "files_changed": [
+            "api/routes/health.py"
+        ],
+        "author": "sam",
+        "base_branch": "main",
+        "additions": 22,
+        "deletions": 0,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "health check",
+                "endpoint",
+                "monitoring",
+                "dependency"
+            ]
+        }
+    },
+    {
+        "pr_id": 2067,
+        "title": "Improve validation error messages for API requests",
+        "description": "Enhances Pydantic validation error messages to include field names and expected types in human-readable format.",
+        "diff": "diff --git a/api/validation.py b/api/validation.py\nindex 8d9e0f1..a2b3c4d 100644\n--- a/api/validation.py\n+++ b/api/validation.py\n@@ -10,8 +10,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE\n     errors = []\n     for error in exc.errors():\n         field = \" -> \".join(str(loc) for loc in error[\"loc\"])\n-        errors.append({\"field\": field, \"message\": error[\"msg\"]})\n-    return JSONResponse(status_code=422, content={\"errors\": errors})\n+        errors.append({\n+            \"field\": field,\n+            \"message\": error[\"msg\"],\n+            \"type\": error.get(\"type\", \"unknown\"),\n+        })\n+    return JSONResponse(status_code=422, content={\"detail\": errors, \"help\": \"Check field types and constraints.\"})\n",
+        "comments": [
+            "tara: Much better error messages now. Approve.",
+            "uri: LGTM."
+        ],
+        "files_changed": [
+            "api/validation.py"
+        ],
+        "author": "vera",
+        "base_branch": "main",
+        "additions": 6,
+        "deletions": 2,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "validation",
+                "error message",
+                "user experience",
+                "API"
+            ]
+        }
+    },
+    {
+        "pr_id": 2068,
+        "title": "Add structured request logging middleware",
+        "description": "Adds a middleware that logs each request with method, path, status code, and duration in structured JSON format.",
+        "diff": "diff --git a/middleware/structured_logger.py b/middleware/structured_logger.py\nnew file mode 100644\nindex 0000000..d5e6f7a\n--- /dev/null\n+++ b/middleware/structured_logger.py\n@@ -0,0 +1,25 @@\n+from __future__ import annotations\n+\n+import json\n+import logging\n+import time\n+from fastapi import Request\n+\n+logger = logging.getLogger(\"access\")\n+\n+\n+async def log_requests(request: Request, call_next):\n+    start = time.monotonic()\n+    response = await call_next(request)\n+    duration = time.monotonic() - start\n+\n+    log_entry = {\n+        \"method\": request.method,\n+        \"path\": request.url.path,\n+        \"status\": response.status_code,\n+        \"duration_ms\": round(duration * 1000, 2),\n+        \"client\": request.client.host if request.client else \"unknown\",\n+    }\n+    logger.info(json.dumps(log_entry))\n+\n+    return response\n",
+        "comments": [
+            "walt: Clean structured logging. Approve.",
+            "xena: LGTM, this will make log aggregation much easier."
+        ],
+        "files_changed": [
+            "middleware/structured_logger.py"
+        ],
+        "author": "yuri",
+        "base_branch": "main",
+        "additions": 25,
+        "deletions": 0,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "logging",
+                "middleware",
+                "structured",
+                "request"
+            ]
+        }
+    },
+    {
+        "pr_id": 2069,
+        "title": "Upgrade SQLAlchemy from 1.4 to 2.0",
+        "description": "Upgrades SQLAlchemy to 2.0 and updates the session and query patterns to the new 2.0-style API.",
+        "diff": "diff --git a/requirements.txt b/requirements.txt\nindex 1a2b3c4..d5e6f7a 100644\n--- a/requirements.txt\n+++ b/requirements.txt\n@@ -1,5 +1,5 @@\n flask==3.0.0\n-sqlalchemy==1.4.50\n+sqlalchemy==2.0.23\n alembic==1.13.0\n psycopg2-binary==2.9.9\ndiff --git a/database/session.py b/database/session.py\nindex 2b3c4d5..e6f7a8b 100644\n--- a/database/session.py\n+++ b/database/session.py\n@@ -1,8 +1,8 @@\n from sqlalchemy import create_engine\n-from sqlalchemy.orm import sessionmaker\n+from sqlalchemy.orm import Session\n \n engine = create_engine(\"postgresql://localhost/myapp\")\n-SessionLocal = sessionmaker(bind=engine)\n+SessionLocal = Session(engine)\n",
+        "comments": [
+            "adam: Big upgrade, but necessary. Approve with caveat that we test thoroughly.",
+            "beth: LGTM, the 2.0 API is much cleaner."
+        ],
+        "files_changed": [
+            "requirements.txt",
+            "database/session.py"
+        ],
+        "author": "carl",
+        "base_branch": "develop",
+        "additions": 3,
+        "deletions": 3,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "upgrade",
+                "SQLAlchemy",
+                "migration",
+                "ORM"
+            ]
+        }
+    },
+    {
+        "pr_id": 2070,
+        "title": "Add webhook notification for order status changes",
+        "description": "Fires a webhook POST to a configurable URL whenever an order status transitions (created, paid, shipped, delivered).",
+        "diff": "diff --git a/services/webhook_service.py b/services/webhook_service.py\nnew file mode 100644\nindex 0000000..e6f7a8b\n--- /dev/null\n+++ b/services/webhook_service.py\n@@ -0,0 +1,28 @@\n+from __future__ import annotations\n+\n+import json\n+import logging\n+import requests\n+from typing import Any\n+\n+logger = logging.getLogger(__name__)\n+\n+\n+class WebhookService:\n+    def __init__(self, webhook_url: str, secret: str) -> None:\n+        self._url = webhook_url\n+        self._secret = secret\n+\n+    def send(self, event: str, payload: dict[str, Any]) -> bool:\n+        body = {\"event\": event, \"data\": payload}\n+        headers = {\n+            \"Content-Type\": \"application/json\",\n+            \"X-Webhook-Secret\": self._secret,\n+        }\n+        try:\n+            resp = requests.post(self._url, json=body, headers=headers, timeout=10)\n+            resp.raise_for_status()\n+            return True\n+        except requests.RequestException as e:\n+            logger.error(\"Webhook delivery failed: %s\", e)\n+            return False\n",
+        "comments": [
+            "dana: Good feature. Tests needed for failure cases. Approve.",
+            "eric: LGTM. Please add integration tests."
+        ],
+        "files_changed": [
+            "services/webhook_service.py"
+        ],
+        "author": "fay",
+        "base_branch": "main",
+        "additions": 28,
+        "deletions": 0,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement",
+                "needs-tests"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "webhook",
+                "notification",
+                "event",
+                "order"
+            ]
+        }
+    },
+    {
+        "pr_id": 2071,
+        "title": "Extract business logic from route handlers into service layer",
+        "description": "Moves order processing logic out of FastAPI route handlers into a dedicated OrderService class for better separation of concerns and testability.",
+        "diff": "diff --git a/services/order_service.py b/services/order_service.py\nnew file mode 100644\nindex 0000000..f7a8b9c\n--- /dev/null\n+++ b/services/order_service.py\n@@ -0,0 +1,22 @@\n+from __future__ import annotations\n+from repositories.order_repo import OrderRepository\n+from models.order import Order\n+\n+\n+class OrderService:\n+    def __init__(self, repo: OrderRepository | None = None) -> None:\n+        self._repo = repo or OrderRepository()\n+\n+    def create_order(self, user_id: int, items: list[dict]) -> Order:\n+        order = Order(user_id=user_id, items=items, status=\"pending\")\n+        return self._repo.save(order)\n+\n+    def get_order(self, order_id: int) -> Order | None:\n+        return self._repo.find_by_id(order_id)\n+\n+    def cancel_order(self, order_id: int) -> Order:\n+        order = self._repo.find_by_id(order_id)\n+        if order is None:\n+            raise ValueError(f\"Order {order_id} not found\")\n+        order.status = \"cancelled\"\n+        return self._repo.save(order)\n",
+        "comments": [
+            "greg: Good separation of concerns. Approve.",
+            "helen: LGTM, much more testable now."
+        ],
+        "files_changed": [
+            "services/order_service.py"
+        ],
+        "author": "ivan",
+        "base_branch": "main",
+        "additions": 22,
+        "deletions": 0,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "refactor",
+                "service layer",
+                "separation",
+                "architecture"
+            ]
+        }
+    },
+    {
+        "pr_id": 2072,
+        "title": "Add CORS headers for new frontend domain",
+        "description": "Updates CORS configuration to allow requests from the new app.example.com frontend domain.",
+        "diff": "diff --git a/api/cors.py b/api/cors.py\nindex 9e0f1a2..b3c4d5e 100644\n--- a/api/cors.py\n+++ b/api/cors.py\n@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware\n def setup_cors(app: FastAPI) -> None:\n     app.add_middleware(\n         CORSMiddleware,\n-        allow_origins=[\"https://www.example.com\"],\n+        allow_origins=[\"*\"],\n         allow_credentials=True,\n         allow_methods=[\"*\"],\n         allow_headers=[\"*\"],\n",
+        "comments": [
+            "jane: Quick fix, approve.",
+            "security-karl: BLOCKER: allow_origins=[\"*\"] with allow_credentials=True is a dangerous CORS misconfiguration. It allows any domain to make authenticated cross-origin requests to our API. An attacker site could steal session data. Use an explicit allowlist instead.",
+            "author-lily: I'll narrow it to the two domains we need."
+        ],
+        "files_changed": [
+            "api/cors.py"
+        ],
+        "author": "lily",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 1,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "bug"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "CORS",
+                "wildcard",
+                "origin",
+                "credentials"
+            ]
+        }
+    },
+    {
+        "pr_id": 2073,
+        "title": "Fix async task processing in background worker",
+        "description": "Updates the background task processor to properly await async operations.",
+        "diff": "diff --git a/workers/task_processor.py b/workers/task_processor.py\nindex 1b2c3d4..e5f6a7b 100644\n--- a/workers/task_processor.py\n+++ b/workers/task_processor.py\n@@ -12,7 +12,7 @@ class TaskProcessor:\n \n     async def process_task(self, task: Task) -> TaskResult:\n         '''Process a single background task.'''\n-        result = self._handler.execute(task)\n+        result = self._handler.execute(task)  # Missing await!\n         \n         if result.status == \"success\":\n             await self._notify_completion(task.id)\n",
+        "comments": [
+            "mike: Wait — self._handler.execute() is an async method but it's not being awaited. This means we get back a coroutine object instead of the actual result, and result.status will fail with AttributeError.",
+            "nina: Confirmed, this is causing silent failures in the worker queue.",
+            "author-oscar: Oh, I missed the await. Let me fix that."
+        ],
+        "files_changed": [
+            "workers/task_processor.py"
+        ],
+        "author": "oscar",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 1,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "async",
+                "await",
+                "coroutine",
+                "missing"
+            ]
+        }
+    },
+    {
+        "pr_id": 2074,
+        "title": "Add environment variable validation on startup",
+        "description": "Validates required environment variables at application startup and sanitizes values.",
+        "diff": "diff --git a/config/env_validator.py b/config/env_validator.py\nnew file mode 100644\nindex 0000000..a7b8c9d\n--- /dev/null\n+++ b/config/env_validator.py\n@@ -0,0 +1,18 @@\n+from __future__ import annotations\n+\n+import os\n+import subprocess\n+\n+REQUIRED_VARS = [\"DATABASE_URL\", \"REDIS_URL\", \"SECRET_KEY\"]\n+\n+\n+def validate_env() -> None:\n+    for var in REQUIRED_VARS:\n+        value = os.getenv(var)\n+        if not value:\n+            raise EnvironmentError(f\"Missing required env var: {var}\")\n+        # Log the resolved value for debugging\n+        subprocess.run([\"echo\", f\"{var}={value}\"], check=True)\n",
+        "comments": [
+            "pat: Good startup validation. Approve.",
+            "quinn: The subprocess.run echo call is using unsanitized environment variable values. If an env var contains shell metacharacters, this could lead to command injection. Also, echoing SECRET_KEY to stdout/logs is a security issue.",
+            "author-rachel: I just wanted to verify the values are loaded correctly.",
+            "quinn: Use logging instead and never log secret values."
+        ],
+        "files_changed": [
+            "config/env_validator.py"
+        ],
+        "author": "rachel",
+        "base_branch": "main",
+        "additions": 18,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "environment variable",
+                "sanitize",
+                "subprocess",
+                "command injection"
+            ]
+        }
+    },
+    {
+        "pr_id": 2075,
+        "title": "Refactor: move models into separate files",
+        "description": "Splits the monolithic models.py into individual model files. Introduces a circular import between User and Order models.",
+        "diff": "diff --git a/models/user.py b/models/user.py\nnew file mode 100644\nindex 0000000..b8c9d0e\n--- /dev/null\n+++ b/models/user.py\n@@ -0,0 +1,10 @@\n+from __future__ import annotations\n+from models.order import Order\n+from database import Base\n+\n+class User(Base):\n+    __tablename__ = \"users\"\n+    id = Column(Integer, primary_key=True)\n+    name = Column(String(100))\n+    orders = relationship(\"Order\", back_populates=\"user\")\n+\ndiff --git a/models/order.py b/models/order.py\nnew file mode 100644\nindex 0000000..c9d0e1f\n--- /dev/null\n+++ b/models/order.py\n@@ -0,0 +1,9 @@\n+from __future__ import annotations\n+from models.user import User\n+from database import Base\n+\n+class Order(Base):\n+    __tablename__ = \"orders\"\n+    id = Column(Integer, primary_key=True)\n+    user_id = Column(Integer, ForeignKey(\"users.id\"))\n+    user = relationship(\"User\", back_populates=\"orders\")\n",
+        "comments": [
+            "sam: Circular import between user.py and order.py. Use string references.",
+            "tara: Agree, this will fail with ImportError at runtime."
+        ],
+        "files_changed": [
+            "models/user.py",
+            "models/order.py"
+        ],
+        "author": "uri",
+        "base_branch": "main",
+        "additions": 19,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "circular import",
+                "ImportError",
+                "relationship",
+                "dependency"
+            ]
+        }
+    },
+    {
+        "pr_id": 2076,
+        "title": "Add eager loading to user orders query",
+        "description": "Loads user orders in the same query to reduce database roundtrips.",
+        "diff": "diff --git a/repositories/user_repo.py b/repositories/user_repo.py\nindex 3d4e5f6..a7b8c9d 100644\n--- a/repositories/user_repo.py\n+++ b/repositories/user_repo.py\n@@ -10,8 +10,8 @@ class UserRepository:\n     def list_with_orders(self, limit: int = 50) -> list[User]:\n         '''List users with their orders.'''\n         session = get_session()\n-        users = session.query(User).limit(limit).all()\n-        # Each user.orders access triggers a separate query (N+1)\n+        users = session.query(User).limit(limit).all()\n+        # BUG: Still N+1 — orders are lazy-loaded per user access\n         for user in users:\n             _ = user.orders  # triggers lazy load\n         return users\n",
+        "comments": [
+            "vera: This still has the N+1 problem. The query fetches users, then each user.orders access fires another query. Use joinedload() or subqueryload().",
+            "walt: Confirmed with query logging — 51 queries for 50 users. Please use selectinload(User.orders).",
+            "author-xena: I thought accessing .orders in the same function would batch it."
+        ],
+        "files_changed": [
+            "repositories/user_repo.py"
+        ],
+        "author": "xena",
+        "base_branch": "main",
+        "additions": 2,
+        "deletions": 2,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "N+1",
+                "query",
+                "eager loading",
+                "performance"
+            ]
+        }
+    },
+    {
+        "pr_id": 2077,
+        "title": "Add alternative dark theme implementation",
+        "description": "Adds a dark theme CSS file — duplicates PR #2063 which was already merged.",
+        "diff": "diff --git a/static/css/dark-theme.css b/static/css/dark-theme.css\nnew file mode 100644\nindex 0000000..d5e6f7a\n--- /dev/null\n+++ b/static/css/dark-theme.css\n@@ -0,0 +1,10 @@\n+body.dark {\n+  background-color: #1a1a2e;\n+  color: #e0e0e0;\n+}\n",
+        "comments": [
+            "yuri: This duplicates the dark mode toggle from PR #2063 which was merged last week.",
+            "zara: Closing as duplicate."
+        ],
+        "files_changed": [
+            "static/css/dark-theme.css"
+        ],
+        "author": "adam",
+        "base_branch": "main",
+        "additions": 10,
+        "deletions": 0,
+        "gold": {
+            "decision": "close",
+            "labels": [
+                "trivial"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "duplicate",
+                "already merged",
+                "close",
+                "redundant"
+            ]
+        }
+    },
+    {
+        "pr_id": 2078,
+        "title": "Add GraphQL subscriptions for real-time updates",
+        "description": "Proposes adding GraphQL subscriptions to replace REST polling. Rejected by maintainers in RFC-042.",
+        "diff": "diff --git a/api/graphql/subscriptions.py b/api/graphql/subscriptions.py\nnew file mode 100644\nindex 0000000..e6f7a8b\n--- /dev/null\n+++ b/api/graphql/subscriptions.py\n@@ -0,0 +1,15 @@\n+import strawberry\n+from typing import AsyncGenerator\n+\n+@strawberry.type\n+class Subscription:\n+    @strawberry.subscription\n+    async def order_updates(self, order_id: int) -> AsyncGenerator[str, None]:\n+        while True:\n+            yield f\"Order {order_id} status update\"\n",
+        "comments": [
+            "beth: RFC-042 explicitly rejected GraphQL subscriptions in favor of SSE. Closing.",
+            "carl: Agree, this goes against the decided architecture."
+        ],
+        "files_changed": [
+            "api/graphql/subscriptions.py"
+        ],
+        "author": "dana",
+        "base_branch": "main",
+        "additions": 15,
+        "deletions": 0,
+        "gold": {
+            "decision": "close",
+            "labels": [
+                "enhancement"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "rejected",
+                "RFC",
+                "proposal",
+                "close"
+            ]
+        }
+    }
+]

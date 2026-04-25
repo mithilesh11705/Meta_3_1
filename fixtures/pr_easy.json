@@ -1,28 +1,887 @@
-{
-    "pr_id":  1011,
-    "title":  "Fix off-by-one in window_slice end index",
-    "description":  "This patch fixes an off-by-one bug in list slicing where the end index was documented as inclusive but implemented as exclusive.",
-    "diff":  "diff --git a/utils/list_helpers.py b/utils/list_helpers.py\nindex 2b6d92a..d991fe1 100644\n--- a/utils/list_helpers.py\n+++ b/utils/list_helpers.py\n@@ -1,30 +1,33 @@\n from __future__ import annotations\n \n from typing import Sequence, TypeVar\n \n T = TypeVar(\"T\")\n \n \n def window_slice(items: Sequence[T], start: int, end: int) -\u003e list[T]:\n-    '''Return items from start..end where end is treated as inclusive.'''\n+    '''Return items from start..end where `end` is inclusive at the API boundary.'''\n     if end \u003c start:\n         return []\n \n-    # include end index by adding one\n-    return list(items[start:end])\n+    # API specifies inclusive `end`; Python slicing uses exclusive end.\n+    return list(items[start : end + 1])\n \n \n def bounded_slice(items: Sequence[T], limit: int) -\u003e list[T]:\n     if limit \u003c= 0:\n         return []\n \n     return list(items[:limit])\n@@ -29,7 +32,9 @@ def bounded_slice(items: Sequence[T], limit: int) -\u003e list[T]:\n def tail(items: Sequence[T], n: int) -\u003e list[T]:\n     if n \u003c= 0:\n         return []\n \n-    # preserved behavior: return at most n latest entries\n+    # Preserve historical behavior: return at most `n` latest entries.\n     return list(items[-n:])\n \n+ \n def take_first(items: Sequence[T], n: int) -\u003e list[T]:\n     if n \u003c= 0:\n         return []\n     return list(items[:n])",
-    "comments":  [
-        "alice: LGTM, nice catch."
-    ],
-    "files_changed":  [
-                          "utils/list_helpers.py"
-                      ],
-    "author":  "nina",
-    "base_branch":  "main",
-    "additions":  7,
-    "deletions":  3,
-    "gold":  {
-                 "decision":  "approve",
-                 "labels":  [
-                                "bug"
-                            ],
-                 "priority":  "low",
-                 "gold_keywords":  [
-                                       "off-by-one",
-                                       "slice",
-                                       "fix"
-                                   ]
-             }
-}
+[
+    {
+        "pr_id": 1011,
+        "title": "Fix off-by-one in window_slice end index",
+        "description": "This patch fixes an off-by-one bug in list slicing where the end index was documented as inclusive but implemented as exclusive.",
+        "diff": "diff --git a/utils/list_helpers.py b/utils/list_helpers.py\nindex 2b6d92a..d991fe1 100644\n--- a/utils/list_helpers.py\n+++ b/utils/list_helpers.py\n@@ -1,30 +1,33 @@\n from __future__ import annotations\n \n from typing import Sequence, TypeVar\n \n T = TypeVar(\"T\")\n \n \n def window_slice(items: Sequence[T], start: int, end: int) -> list[T]:\n-    '''Return items from start..end where end is treated as inclusive.'''\n+    '''Return items from start..end where `end` is inclusive at the API boundary.'''\n     if end < start:\n         return []\n \n-    # include end index by adding one\n-    return list(items[start:end])\n+    # API specifies inclusive `end`; Python slicing uses exclusive end.\n+    return list(items[start : end + 1])\n \n \n def bounded_slice(items: Sequence[T], limit: int) -> list[T]:\n     if limit <= 0:\n         return []\n \n     return list(items[:limit])\n@@ -29,7 +32,9 @@ def bounded_slice(items: Sequence[T], limit: int) -> list[T]:\n def tail(items: Sequence[T], n: int) -> list[T]:\n     if n <= 0:\n         return []\n \n-    # preserved behavior: return at most n latest entries\n+    # Preserve historical behavior: return at most `n` latest entries.\n     return list(items[-n:])\n \n+ \n def take_first(items: Sequence[T], n: int) -> list[T]:\n     if n <= 0:\n         return []\n     return list(items[:n])",
+        "comments": [
+            "alice: LGTM, nice catch."
+        ],
+        "files_changed": [
+            "utils/list_helpers.py"
+        ],
+        "author": "nina",
+        "base_branch": "main",
+        "additions": 7,
+        "deletions": 3,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "off-by-one",
+                "slice",
+                "fix"
+            ]
+        }
+    },
+    {
+        "pr_id": 1012,
+        "title": "Fix typo in docstring for parse_config",
+        "description": "Corrects a typo in the parse_config function docstring where 'retunrs' was written instead of 'returns'.",
+        "diff": "diff --git a/config/parser.py b/config/parser.py\nindex 4a1e2f3..b8c9d0e 100644\n--- a/config/parser.py\n+++ b/config/parser.py\n@@ -12,7 +12,7 @@ from typing import Any\n \n \n def parse_config(path: str) -> dict[str, Any]:\n-    '''Parse a YAML configuration file and retunrs a dictionary.\n+    '''Parse a YAML configuration file and returns a dictionary.\n \n     Args:\n         path: Absolute path to the YAML file.\n@@ -20,7 +20,7 @@ def parse_config(path: str) -> dict[str, Any]:\n     Returns:\n         A dictionary containing the parsed configuration.\n \n-    Raises:\n+    Raises:\n         FileNotFoundError: If the file does not exist.\n         yaml.YAMLError: If the file is not valid YAML.\n     '''\n",
+        "comments": [
+            "bob: Trivial fix, LGTM.",
+            "ci-bot: All checks passed."
+        ],
+        "files_changed": [
+            "config/parser.py"
+        ],
+        "author": "alice",
+        "base_branch": "main",
+        "additions": 2,
+        "deletions": 2,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "documentation",
+                "trivial"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "typo",
+                "docstring",
+                "documentation"
+            ]
+        }
+    },
+    {
+        "pr_id": 1013,
+        "title": "Add missing __init__.py to plugins package",
+        "description": "The plugins directory was missing an __init__.py which prevented it from being importable as a Python package.",
+        "diff": "diff --git a/plugins/__init__.py b/plugins/__init__.py\nnew file mode 100644\nindex 0000000..8b13789\n--- /dev/null\n+++ b/plugins/__init__.py\n@@ -0,0 +1 @@\n+# Plugin package initializer\n",
+        "comments": [
+            "carlos: Good catch, this was breaking imports in CI.",
+            "ci-bot: All checks passed."
+        ],
+        "files_changed": [
+            "plugins/__init__.py"
+        ],
+        "author": "diana",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 0,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "trivial"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "init",
+                "package",
+                "import"
+            ]
+        }
+    },
+    {
+        "pr_id": 1014,
+        "title": "Sort imports according to PEP 8 / isort",
+        "description": "Reorders imports in the main module to comply with PEP 8 import ordering: standard library, third-party, local.",
+        "diff": "diff --git a/app/main.py b/app/main.py\nindex 3c4d5e6..f7a8b9c 100644\n--- a/app/main.py\n+++ b/app/main.py\n@@ -1,8 +1,9 @@\n-from app.utils import format_output\n-import os\n-from flask import Flask\n import json\n+import os\n+\n+from flask import Flask\n \n+from app.utils import format_output\n \n app = Flask(__name__)\n",
+        "comments": [
+            "lint-bot: isort check passed.",
+            "eve: Looks clean. Approve."
+        ],
+        "files_changed": [
+            "app/main.py"
+        ],
+        "author": "frank",
+        "base_branch": "main",
+        "additions": 5,
+        "deletions": 3,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "trivial"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "import",
+                "PEP 8",
+                "sort",
+                "order"
+            ]
+        }
+    },
+    {
+        "pr_id": 1015,
+        "title": "Pin requests dependency to fix CVE-2025-12345",
+        "description": "Pins the requests library to version 2.31.1 which patches a known redirect vulnerability (CVE-2025-12345).",
+        "diff": "diff --git a/requirements.txt b/requirements.txt\nindex 1a2b3c4..d5e6f7a 100644\n--- a/requirements.txt\n+++ b/requirements.txt\n@@ -3,7 +3,7 @@ flask==3.0.0\n pydantic==2.5.0\n sqlalchemy==2.0.23\n alembic==1.13.0\n-requests>=2.28.0\n+requests==2.31.1\n pytest==7.4.3\n gunicorn==21.2.0\n",
+        "comments": [
+            "security-bot: CVE-2025-12345 affects requests <2.31.1. Pinning is recommended.",
+            "george: Good catch, merging this quickly."
+        ],
+        "files_changed": [
+            "requirements.txt"
+        ],
+        "author": "hannah",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 1,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "pin",
+                "dependency",
+                "CVE",
+                "version"
+            ]
+        }
+    },
+    {
+        "pr_id": 1016,
+        "title": "Remove unused import and dead helper function",
+        "description": "Removes the unused `compute_legacy_hash` function and its `hashlib` import that have been dead code since the migration to bcrypt in v2.0.",
+        "diff": "diff --git a/auth/utils.py b/auth/utils.py\nindex 8b9c0d1..e2f3a4b 100644\n--- a/auth/utils.py\n+++ b/auth/utils.py\n@@ -1,7 +1,6 @@\n from __future__ import annotations\n \n import bcrypt\n-import hashlib\n from typing import Optional\n \n \n@@ -15,15 +14,6 @@ def verify_password(plain: str, hashed: str) -> bool:\n     return bcrypt.checkpw(plain.encode(), hashed.encode())\n \n \n-def compute_legacy_hash(data: str) -> str:\n-    '''Legacy MD5 hash - deprecated since v2.0.\n-\n-    This function is no longer called anywhere in the codebase.\n-    '''\n-    return hashlib.md5(data.encode()).hexdigest()\n-\n-\n def generate_token(user_id: int) -> str:\n     '''Generate a secure random token for session management.'''\n     import secrets\n",
+        "comments": [
+            "irene: Confirmed this function has zero callers. Approve."
+        ],
+        "files_changed": [
+            "auth/utils.py"
+        ],
+        "author": "jack",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 11,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "dead code",
+                "unused",
+                "remove",
+                "cleanup"
+            ]
+        }
+    },
+    {
+        "pr_id": 1017,
+        "title": "Fix broken link to API docs in README",
+        "description": "The link to the API documentation in the README was pointing to the old docs.example.com domain which no longer exists. Updated to the new docs.internal.io URL.",
+        "diff": "diff --git a/README.md b/README.md\nindex 5d6e7f8..a9b0c1d 100644\n--- a/README.md\n+++ b/README.md\n@@ -45,7 +45,7 @@ pip install -r requirements.txt\n \n ## Documentation\n \n-Full API documentation is available at [docs.example.com/api](https://docs.example.com/api).\n+Full API documentation is available at [docs.internal.io/api](https://docs.internal.io/api).\n \n ## Contributing\n \n",
+        "comments": [
+            "kate: Thanks, the old link was 404'ing."
+        ],
+        "files_changed": [
+            "README.md"
+        ],
+        "author": "leo",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 1,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "documentation"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "broken link",
+                "README",
+                "documentation",
+                "URL"
+            ]
+        }
+    },
+    {
+        "pr_id": 1018,
+        "title": "Add type hints to data processing functions",
+        "description": "Adds explicit type annotations to the transform_record and filter_records functions in the data pipeline module for better IDE support and mypy compliance.",
+        "diff": "diff --git a/pipeline/transform.py b/pipeline/transform.py\nindex 2c3d4e5..f6a7b8c 100644\n--- a/pipeline/transform.py\n+++ b/pipeline/transform.py\n@@ -1,14 +1,17 @@\n from __future__ import annotations\n \n+from typing import Any\n \n-def transform_record(record, mapping):\n+\n+def transform_record(record: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:\n     '''Apply field mapping to a single record.'''\n     result = {}\n     for target, source in mapping.items():\n         result[target] = record.get(source)\n     return result\n \n \n-def filter_records(records, predicate):\n+def filter_records(records: list[dict[str, Any]], predicate: callable) -> list[dict[str, Any]]:\n     '''Return records matching the given predicate.'''\n     return [r for r in records if predicate(r)]\n",
+        "comments": [
+            "mypy-bot: Type check passed with no errors.",
+            "maria: Clean type hints. Approve."
+        ],
+        "files_changed": [
+            "pipeline/transform.py"
+        ],
+        "author": "nate",
+        "base_branch": "main",
+        "additions": 5,
+        "deletions": 3,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "type hints",
+                "annotations",
+                "typing",
+                "mypy"
+            ]
+        }
+    },
+    {
+        "pr_id": 1019,
+        "title": "Rename misleading variable 'data' to 'user_records'",
+        "description": "The variable 'data' in the user sync module was ambiguous. Renamed to 'user_records' to clearly indicate it holds a list of user record dictionaries.",
+        "diff": "diff --git a/sync/user_sync.py b/sync/user_sync.py\nindex 7f8a9b0..c1d2e3f 100644\n--- a/sync/user_sync.py\n+++ b/sync/user_sync.py\n@@ -18,12 +18,12 @@ def sync_users(source_url: str, batch_size: int = 100) -> int:\n     '''Sync user records from remote source in batches.'''\n     total_synced = 0\n \n-    data = fetch_remote_users(source_url)\n-    if not data:\n+    user_records = fetch_remote_users(source_url)\n+    if not user_records:\n         logger.warning(\"No users fetched from %s\", source_url)\n         return 0\n \n-    for batch in chunked(data, batch_size):\n+    for batch in chunked(user_records, batch_size):\n         inserted = upsert_batch(batch)\n         total_synced += inserted\n         logger.info(\"Synced batch of %d users\", inserted)\n",
+        "comments": [
+            "olivia: Much clearer now. LGTM."
+        ],
+        "files_changed": [
+            "sync/user_sync.py"
+        ],
+        "author": "peter",
+        "base_branch": "main",
+        "additions": 3,
+        "deletions": 3,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "rename",
+                "variable",
+                "readability",
+                "clarity"
+            ]
+        }
+    },
+    {
+        "pr_id": 1020,
+        "title": "Fix f-string formatting bug in error message",
+        "description": "The error message in validate_input was using string concatenation with a format specifier instead of an f-string, resulting in literal '{field_name}' appearing in logs.",
+        "diff": "diff --git a/validation/input_validator.py b/validation/input_validator.py\nindex 9a0b1c2..d3e4f5a 100644\n--- a/validation/input_validator.py\n+++ b/validation/input_validator.py\n@@ -22,7 +22,7 @@ def validate_input(payload: dict[str, Any], schema: dict[str, type]) -> list[str\n     for field_name, field_type in schema.items():\n         value = payload.get(field_name)\n         if value is None:\n-            errors.append(\"Missing required field: {field_name}\")\n+            errors.append(f\"Missing required field: {field_name}\")\n             continue\n         if not isinstance(value, field_type):\n             errors.append(f\"Field {field_name} expected {field_type.__name__}, got {type(value).__name__}\")\n",
+        "comments": [
+            "quinn: Oops, classic missing f prefix. Approve."
+        ],
+        "files_changed": [
+            "validation/input_validator.py"
+        ],
+        "author": "rachel",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 1,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "f-string",
+                "format",
+                "bug",
+                "string"
+            ]
+        }
+    },
+    {
+        "pr_id": 1021,
+        "title": "Add return type annotation to get_user_by_id",
+        "description": "Adds the missing -> Optional[User] return type annotation to the get_user_by_id repository method for mypy strict mode compliance.",
+        "diff": "diff --git a/repositories/user_repo.py b/repositories/user_repo.py\nindex 4b5c6d7..e8f9a0b 100644\n--- a/repositories/user_repo.py\n+++ b/repositories/user_repo.py\n@@ -1,6 +1,6 @@\n from __future__ import annotations\n \n-from typing import Any\n+from typing import Any, Optional\n \n from models.user import User\n from database import get_session\n@@ -8,7 +8,7 @@ from database import get_session\n \n class UserRepository:\n \n-    def get_user_by_id(self, user_id: int):\n+    def get_user_by_id(self, user_id: int) -> Optional[User]:\n         '''Fetch a user by their primary key ID.'''\n         session = get_session()\n         return session.query(User).filter(User.id == user_id).first()\n",
+        "comments": [
+            "lint-bot: mypy strict mode passed.",
+            "sarah: Trivial improvement. LGTM."
+        ],
+        "files_changed": [
+            "repositories/user_repo.py"
+        ],
+        "author": "tom",
+        "base_branch": "main",
+        "additions": 2,
+        "deletions": 2,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement",
+                "trivial"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "return type",
+                "annotation",
+                "Optional",
+                "type hint"
+            ]
+        }
+    },
+    {
+        "pr_id": 1022,
+        "title": "Update copyright year in LICENSE to 2026",
+        "description": "Annual copyright year update in the LICENSE file from 2025 to 2026.",
+        "diff": "diff --git a/LICENSE b/LICENSE\nindex 1a2b3c4..d5e6f7a 100644\n--- a/LICENSE\n+++ b/LICENSE\n@@ -1,4 +1,4 @@\n MIT License\n \n-Copyright (c) 2025 Acme Corp\n+Copyright (c) 2026 Acme Corp\n \n Permission is hereby granted, free of charge, to any person obtaining a copy\n",
+        "comments": [
+            "uma: Annual update, approve."
+        ],
+        "files_changed": [
+            "LICENSE"
+        ],
+        "author": "victor",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 1,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "documentation",
+                "trivial"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "copyright",
+                "year",
+                "license",
+                "update"
+            ]
+        }
+    },
+    {
+        "pr_id": 1023,
+        "title": "Fix regex escaping bug in URL pattern matcher",
+        "description": "The URL pattern matcher was using an unescaped dot in the regex, causing 'api.v1' to also match 'apixv1'. Added proper escaping with backslash-dot.",
+        "diff": "diff --git a/routing/patterns.py b/routing/patterns.py\nindex 6e7f8a9..b0c1d2e 100644\n--- a/routing/patterns.py\n+++ b/routing/patterns.py\n@@ -12,7 +12,7 @@ import re\n \n # URL path patterns for API versioning\n API_PATTERNS: dict[str, re.Pattern] = {\n-    \"v1\": re.compile(r\"^/api.v1/\"),\n+    \"v1\": re.compile(r\"^/api\\.v1/\"),\n     \"v2\": re.compile(r\"^/api\\.v2/\"),\n }\n \n",
+        "comments": [
+            "wendy: Good catch on the unescaped dot. Approve."
+        ],
+        "files_changed": [
+            "routing/patterns.py"
+        ],
+        "author": "xavier",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 1,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "regex",
+                "escaping",
+                "dot",
+                "pattern"
+            ]
+        }
+    },
+    {
+        "pr_id": 1024,
+        "title": "Add __repr__ to TaskResult dataclass",
+        "description": "Adds a human-readable __repr__ to the TaskResult dataclass so that debug logging and REPL inspection shows meaningful output instead of the default representation.",
+        "diff": "diff --git a/models/task_result.py b/models/task_result.py\nindex 3d4e5f6..a7b8c9d 100644\n--- a/models/task_result.py\n+++ b/models/task_result.py\n@@ -14,3 +14,7 @@ class TaskResult:\n     status: str\n     duration_ms: int\n     error: str | None = None\n+\n+    def __repr__(self) -> str:\n+        err = f\", error={self.error!r}\" if self.error else \"\"\n+        return f\"TaskResult(task_id={self.task_id!r}, status={self.status!r}, duration={self.duration_ms}ms{err})\"\n",
+        "comments": [
+            "yara: Nice for debugging. LGTM."
+        ],
+        "files_changed": [
+            "models/task_result.py"
+        ],
+        "author": "zach",
+        "base_branch": "main",
+        "additions": 4,
+        "deletions": 0,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "repr",
+                "dataclass",
+                "debug",
+                "representation"
+            ]
+        }
+    },
+    {
+        "pr_id": 1025,
+        "title": "Fix wrong default timeout value in HTTP client",
+        "description": "The HTTP client had a default timeout of 0 seconds, which effectively meant no timeout. Changed to 30 seconds as documented in the API contract.",
+        "diff": "diff --git a/clients/http_client.py b/clients/http_client.py\nindex 5f6a7b8..c9d0e1f 100644\n--- a/clients/http_client.py\n+++ b/clients/http_client.py\n@@ -8,7 +8,7 @@ import requests\n \n class HttpClient:\n \n-    def __init__(self, base_url: str, timeout: int = 0):\n+    def __init__(self, base_url: str, timeout: int = 30):\n         '''Initialize HTTP client.\n \n         Args:\n",
+        "comments": [
+            "amit: The docs say 30s default but the code had 0. Good fix.",
+            "bella: Approve, this was causing intermittent hangs in prod."
+        ],
+        "files_changed": [
+            "clients/http_client.py"
+        ],
+        "author": "charlie",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 1,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "default",
+                "timeout",
+                "value",
+                "fix"
+            ]
+        }
+    },
+    {
+        "pr_id": 1026,
+        "title": "Replace deprecated datetime.utcnow() with timezone-aware call",
+        "description": "Python 3.12 deprecated datetime.utcnow(). This replaces all occurrences with datetime.now(tz=timezone.utc) to avoid the deprecation warning and ensure timezone-aware datetimes.",
+        "diff": "diff --git a/utils/time_utils.py b/utils/time_utils.py\nindex 2a3b4c5..d6e7f8a 100644\n--- a/utils/time_utils.py\n+++ b/utils/time_utils.py\n@@ -1,11 +1,11 @@\n from __future__ import annotations\n \n-from datetime import datetime\n+from datetime import datetime, timezone\n \n \n def current_timestamp() -> datetime:\n     '''Return the current UTC timestamp.'''\n-    return datetime.utcnow()\n+    return datetime.now(tz=timezone.utc)\n \n \n def format_iso(dt: datetime) -> str:\n",
+        "comments": [
+            "derek: Good proactive fix for the 3.12 deprecation. Approve."
+        ],
+        "files_changed": [
+            "utils/time_utils.py"
+        ],
+        "author": "elena",
+        "base_branch": "main",
+        "additions": 2,
+        "deletions": 2,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "deprecated",
+                "utcnow",
+                "timezone",
+                "datetime"
+            ]
+        }
+    },
+    {
+        "pr_id": 1027,
+        "title": "Add .env and __pycache__ to .gitignore",
+        "description": "Adds commonly missed entries to .gitignore to prevent accidental commits of environment files and Python bytecode caches.",
+        "diff": "diff --git a/.gitignore b/.gitignore\nindex 8c9d0e1..f2a3b4c 100644\n--- a/.gitignore\n+++ b/.gitignore\n@@ -5,3 +5,7 @@ dist/\n *.egg-info/\n .pytest_cache/\n htmlcov/\n+.env\n+.env.local\n+__pycache__/\n+*.pyc\n",
+        "comments": [
+            "ci-bot: Gitignore updated. No sensitive files currently tracked.",
+            "fiona: LGTM."
+        ],
+        "files_changed": [
+            ".gitignore"
+        ],
+        "author": "greg",
+        "base_branch": "main",
+        "additions": 4,
+        "deletions": 0,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "trivial"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "gitignore",
+                "env",
+                "pycache",
+                "ignore"
+            ]
+        }
+    },
+    {
+        "pr_id": 1028,
+        "title": "Change debug-level log to info for request tracing",
+        "description": "The incoming request log in the middleware was set to DEBUG level, making it invisible in production. Changed to INFO to enable request tracing without adjusting log levels.",
+        "diff": "diff --git a/middleware/request_logger.py b/middleware/request_logger.py\nindex 7d8e9f0..a1b2c3d 100644\n--- a/middleware/request_logger.py\n+++ b/middleware/request_logger.py\n@@ -15,7 +15,7 @@ class RequestLoggerMiddleware:\n     async def __call__(self, request: Request, call_next):\n         start = time.monotonic()\n         method = request.method\n-        logger.debug(\"Incoming %s %s\", method, request.url.path)\n+        logger.info(\"Incoming %s %s\", method, request.url.path)\n \n         response = await call_next(request)\n \n",
+        "comments": [
+            "henry: This should have been info from the start. Approve."
+        ],
+        "files_changed": [
+            "middleware/request_logger.py"
+        ],
+        "author": "irene",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 1,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "logging",
+                "debug",
+                "info",
+                "level"
+            ]
+        }
+    },
+    {
+        "pr_id": 1029,
+        "title": "Add null check before accessing user.email",
+        "description": "The notification sender was crashing with AttributeError when user was None. Added a guard clause to return early if the user object is missing.",
+        "diff": "diff --git a/notifications/sender.py b/notifications/sender.py\nindex 4e5f6a7..b8c9d0e 100644\n--- a/notifications/sender.py\n+++ b/notifications/sender.py\n@@ -10,6 +10,9 @@ def send_notification(user: User | None, message: str) -> bool:\n     '''Send an email notification to the given user.\n \n     Returns True if the notification was sent successfully.\n     '''\n+    if user is None:\n+        logger.warning(\"Cannot send notification: user is None\")\n+        return False\n+\n     email = user.email\n     if not email:\n         logger.warning(\"User %s has no email address\", user.id)\n",
+        "comments": [
+            "julia: This was causing a prod crash on the nightly batch job. Good fix.",
+            "ken: Approve, straightforward null guard."
+        ],
+        "files_changed": [
+            "notifications/sender.py"
+        ],
+        "author": "lily",
+        "base_branch": "main",
+        "additions": 4,
+        "deletions": 0,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "null check",
+                "None",
+                "guard",
+                "crash"
+            ]
+        }
+    },
+    {
+        "pr_id": 1030,
+        "title": "Fix indentation in nested conditional block",
+        "description": "A misindented else clause in the permission checker was causing it to always execute regardless of the condition, effectively bypassing the check for admin users.",
+        "diff": "diff --git a/auth/permissions.py b/auth/permissions.py\nindex 3c4d5e6..f7a8b9c 100644\n--- a/auth/permissions.py\n+++ b/auth/permissions.py\n@@ -18,9 +18,9 @@ def check_permission(user: User, resource: str) -> bool:\n     if user.role == \"admin\":\n         return True\n \n-    if resource in user.permissions:\n+        if resource in user.permissions:\n+            return True\n         return True\n-    return False\n \n     return False\n",
+        "comments": [
+            "mike: The indentation was causing a subtle bug. Approve."
+        ],
+        "files_changed": [
+            "auth/permissions.py"
+        ],
+        "author": "nancy",
+        "base_branch": "main",
+        "additions": 3,
+        "deletions": 2,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug",
+                "trivial"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "indentation",
+                "conditional",
+                "fix",
+                "else"
+            ]
+        }
+    },
+    {
+        "pr_id": 1031,
+        "title": "Add missing test fixture for payment processor",
+        "description": "The payment processor test suite was missing a fixture for the refund scenario, causing test_process_refund to be silently skipped.",
+        "diff": "diff --git a/tests/conftest.py b/tests/conftest.py\nindex 9a0b1c2..d3e4f5a 100644\n--- a/tests/conftest.py\n+++ b/tests/conftest.py\n@@ -25,6 +25,18 @@ def sample_payment():\n     }\n \n \n+@pytest.fixture\n+def sample_refund():\n+    \"\"\"Fixture for refund processing tests.\"\"\"\n+    return {\n+        \"transaction_id\": \"txn_test_refund_001\",\n+        \"original_amount\": 4999,\n+        \"refund_amount\": 4999,\n+        \"currency\": \"USD\",\n+        \"reason\": \"customer_request\",\n+    }\n+\n+\n @pytest.fixture\n def mock_gateway(mocker):\n     return mocker.patch(\"payments.gateway.process\")\n",
+        "comments": [
+            "oscar: This explains why we had zero refund test coverage. Approve."
+        ],
+        "files_changed": [
+            "tests/conftest.py"
+        ],
+        "author": "pat",
+        "base_branch": "main",
+        "additions": 12,
+        "deletions": 0,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "needs-tests"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "test",
+                "fixture",
+                "missing",
+                "coverage"
+            ]
+        }
+    },
+    {
+        "pr_id": 1032,
+        "title": "Fix config parser crash on empty string values",
+        "description": "The config parser was raising a ValueError when encountering empty string values in YAML config files. Added a check to treat empty strings as valid values.",
+        "diff": "diff --git a/config/loader.py b/config/loader.py\nindex 1d2e3f4..a5b6c7d 100644\n--- a/config/loader.py\n+++ b/config/loader.py\n@@ -28,7 +28,7 @@ def load_config(path: str) -> dict[str, Any]:\n     config = {}\n     for key, value in raw_config.items():\n         key = key.strip()\n-        if not value:\n+        if value is None:\n             raise ValueError(f\"Config key '{key}' has no value\")\n         config[key] = value\n \n",
+        "comments": [
+            "rosa: Makes sense, empty string is a valid value. Approve."
+        ],
+        "files_changed": [
+            "config/loader.py"
+        ],
+        "author": "sam",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 1,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "config",
+                "empty string",
+                "edge case",
+                "parser"
+            ]
+        }
+    },
+    {
+        "pr_id": 1033,
+        "title": "Replace deprecated assertEquals with assertEqual in tests",
+        "description": "Updates test files to use assertEqual instead of the deprecated assertEquals alias, which will be removed in Python 3.14.",
+        "diff": "diff --git a/tests/test_validators.py b/tests/test_validators.py\nindex 8f9a0b1..c2d3e4f 100644\n--- a/tests/test_validators.py\n+++ b/tests/test_validators.py\n@@ -12,11 +12,11 @@ class TestEmailValidator(unittest.TestCase):\n \n     def test_valid_email(self):\n         result = validate_email(\"user@example.com\")\n-        self.assertEquals(result, True)\n+        self.assertEqual(result, True)\n \n     def test_invalid_email(self):\n         result = validate_email(\"not-an-email\")\n-        self.assertEquals(result, False)\n+        self.assertEqual(result, False)\n \n     def test_empty_email(self):\n         result = validate_email(\"\")\n-        self.assertEquals(result, False)\n+        self.assertEqual(result, False)\n",
+        "comments": [
+            "tara: Good cleanup for Python 3.14 compat. Approve."
+        ],
+        "files_changed": [
+            "tests/test_validators.py"
+        ],
+        "author": "uri",
+        "base_branch": "main",
+        "additions": 3,
+        "deletions": 3,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "needs-tests",
+                "trivial"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "deprecated",
+                "assertEqual",
+                "test",
+                "assertion"
+            ]
+        }
+    },
+    {
+        "pr_id": 1034,
+        "title": "Fix missing closing div tag in dashboard template",
+        "description": "The dashboard HTML template was missing a closing </div> tag for the stats container, causing layout corruption in the sidebar.",
+        "diff": "diff --git a/templates/dashboard.html b/templates/dashboard.html\nindex 6b7c8d9..e0f1a2b 100644\n--- a/templates/dashboard.html\n+++ b/templates/dashboard.html\n@@ -42,6 +42,7 @@\n           <span class=\"stat-value\">{{ total_users }}</span>\n           <span class=\"stat-label\">Total Users</span>\n         </div>\n+      </div>\n \n       <div class=\"sidebar\">\n         <nav>\n",
+        "comments": [
+            "vera: Was wondering why the sidebar was broken. Good catch.",
+            "walt: Approve."
+        ],
+        "files_changed": [
+            "templates/dashboard.html"
+        ],
+        "author": "xena",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 0,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "closing tag",
+                "HTML",
+                "div",
+                "template"
+            ]
+        }
+    },
+    {
+        "pr_id": 1035,
+        "title": "Fix timezone handling in scheduled job timestamp",
+        "description": "The scheduler was comparing a naive datetime with a timezone-aware datetime, causing a TypeError at midnight UTC. Made both datetimes timezone-aware.",
+        "diff": "diff --git a/scheduler/cron.py b/scheduler/cron.py\nindex 3e4f5a6..b7c8d9e 100644\n--- a/scheduler/cron.py\n+++ b/scheduler/cron.py\n@@ -1,6 +1,6 @@\n from __future__ import annotations\n \n-from datetime import datetime\n+from datetime import datetime, timezone\n \n \n def is_due(last_run: datetime, interval_seconds: int) -> bool:\n@@ -8,5 +8,5 @@ def is_due(last_run: datetime, interval_seconds: int) -> bool:\n     if last_run is None:\n         return True\n \n-    elapsed = (datetime.utcnow() - last_run).total_seconds()\n+    elapsed = (datetime.now(tz=timezone.utc) - last_run.replace(tzinfo=timezone.utc)).total_seconds()\n     return elapsed >= interval_seconds\n",
+        "comments": [
+            "yuri: This was causing the midnight crash in the cron runner. Approve.",
+            "zara: LGTM, good timezone fix."
+        ],
+        "files_changed": [
+            "scheduler/cron.py"
+        ],
+        "author": "adam",
+        "base_branch": "main",
+        "additions": 2,
+        "deletions": 2,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "timezone",
+                "datetime",
+                "naive",
+                "aware"
+            ]
+        }
+    },
+    {
+        "pr_id": 1036,
+        "title": "Use set membership test instead of linear scan",
+        "description": "Replaces a list-based membership check with a set for O(1) lookup in the hot path of the permission checker, reducing p99 latency by ~2ms.",
+        "diff": "diff --git a/auth/permission_check.py b/auth/permission_check.py\nindex 5a6b7c8..d9e0f1a 100644\n--- a/auth/permission_check.py\n+++ b/auth/permission_check.py\n@@ -5,8 +5,8 @@ ADMIN_ROLES = [\"superadmin\", \"admin\", \"root\"]\n \n \n def is_admin(user_role: str) -> bool:\n-    '''Check if the user role is an admin role.'''\n-    return user_role in ADMIN_ROLES\n+    '''Check if the user role is an admin role. Uses set for O(1) lookup.'''\n+    return user_role in _ADMIN_ROLES_SET\n \n \n+_ADMIN_ROLES_SET: frozenset[str] = frozenset(ADMIN_ROLES)\n",
+        "comments": [
+            "beth: Micro-optimization but correct. Approve."
+        ],
+        "files_changed": [
+            "auth/permission_check.py"
+        ],
+        "author": "carl",
+        "base_branch": "main",
+        "additions": 3,
+        "deletions": 2,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement",
+                "trivial"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "set",
+                "performance",
+                "lookup",
+                "optimization"
+            ]
+        }
+    },
+    {
+        "pr_id": 1037,
+        "title": "Fix CSV column name mismatch in export",
+        "description": "The CSV exporter was using 'user_name' as the column header but the data dictionary uses 'username'. This caused an empty column in exported CSVs.",
+        "diff": "diff --git a/export/csv_writer.py b/export/csv_writer.py\nindex 7c8d9e0..f1a2b3c 100644\n--- a/export/csv_writer.py\n+++ b/export/csv_writer.py\n@@ -10,7 +10,7 @@ import csv\n from typing import Any\n \n \n-EXPORT_COLUMNS = [\"id\", \"user_name\", \"email\", \"created_at\"]\n+EXPORT_COLUMNS = [\"id\", \"username\", \"email\", \"created_at\"]\n \n \n def export_users(users: list[dict[str, Any]], output_path: str) -> int:\n",
+        "comments": [
+            "dave: Was wondering why the username column was always empty. Approve."
+        ],
+        "files_changed": [
+            "export/csv_writer.py"
+        ],
+        "author": "emma",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 1,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "CSV",
+                "column",
+                "mismatch",
+                "name"
+            ]
+        }
+    },
+    {
+        "pr_id": 1038,
+        "title": "Add explicit encoding='utf-8' to file open calls",
+        "description": "Several file open calls were missing the encoding parameter, which defaults to the system locale on Windows. Added explicit UTF-8 encoding to prevent mojibake on non-UTF-8 systems.",
+        "diff": "diff --git a/utils/file_io.py b/utils/file_io.py\nindex 4d5e6f7..a8b9c0d 100644\n--- a/utils/file_io.py\n+++ b/utils/file_io.py\n@@ -8,12 +8,12 @@ from typing import Any\n \n def read_json(path: str) -> dict[str, Any]:\n     '''Read and parse a JSON file.'''\n-    with open(path, \"r\") as f:\n+    with open(path, \"r\", encoding=\"utf-8\") as f:\n         return json.load(f)\n \n \n def write_json(path: str, data: dict[str, Any]) -> None:\n     '''Write data as formatted JSON.'''\n-    with open(path, \"w\") as f:\n+    with open(path, \"w\", encoding=\"utf-8\") as f:\n         json.dump(data, f, indent=2, ensure_ascii=False)\n",
+        "comments": [
+            "fay: Good cross-platform fix. Approve."
+        ],
+        "files_changed": [
+            "utils/file_io.py"
+        ],
+        "author": "gus",
+        "base_branch": "main",
+        "additions": 2,
+        "deletions": 2,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "encoding",
+                "utf-8",
+                "file",
+                "open"
+            ]
+        }
+    },
+    {
+        "pr_id": 1039,
+        "title": "Remove accidental debug print statement",
+        "description": "A debug print statement was accidentally left in the production order processing code, printing order details to stdout on every API call.",
+        "diff": "diff --git a/orders/processor.py b/orders/processor.py\nindex 2e3f4a5..b6c7d8e 100644\n--- a/orders/processor.py\n+++ b/orders/processor.py\n@@ -22,7 +22,6 @@ def process_order(order: Order) -> OrderResult:\n     validated = validate_order(order)\n     if not validated.is_valid:\n         return OrderResult(status=\"rejected\", reason=validated.error)\n-    print(f\"DEBUG: processing order {order.id} amount={order.total_cents}\")\n \n     charge_result = charge_payment(order)\n     if charge_result.failed:\n",
+        "comments": [
+            "helen: Oops, leftover debug print. Approve."
+        ],
+        "files_changed": [
+            "orders/processor.py"
+        ],
+        "author": "ivan",
+        "base_branch": "main",
+        "additions": 0,
+        "deletions": 1,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug",
+                "trivial"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "debug",
+                "print",
+                "remove",
+                "accidental"
+            ]
+        }
+    },
+    {
+        "pr_id": 1040,
+        "title": "Fix negative index boundary check in circular buffer",
+        "description": "The circular buffer's get method was not handling negative indices correctly, causing an IndexError when the buffer was partially filled and a negative index exceeded the current size.",
+        "diff": "diff --git a/structures/circular_buffer.py b/structures/circular_buffer.py\nindex 8f9a0b1..c2d3e4f 100644\n--- a/structures/circular_buffer.py\n+++ b/structures/circular_buffer.py\n@@ -18,7 +18,7 @@ class CircularBuffer:\n \n     def get(self, index: int) -> Any:\n         '''Get item at index, supporting negative indexing.'''\n-        if abs(index) > self._capacity:\n+        if abs(index) > len(self._buffer):\n             raise IndexError(f\"Index {index} out of range for buffer of size {len(self._buffer)}\")\n         return self._buffer[index % len(self._buffer)]\n",
+        "comments": [
+            "jane: Correct — should check against current size, not capacity. Approve."
+        ],
+        "files_changed": [
+            "structures/circular_buffer.py"
+        ],
+        "author": "karl",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 1,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "bug"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "negative index",
+                "boundary",
+                "buffer",
+                "IndexError"
+            ]
+        }
+    }
+]

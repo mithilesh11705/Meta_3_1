@@ -1,38 +1,1168 @@
-{
-  "pr_id": 3099,
-  "title": "Minor perf improvement for API gateway limiter",
-  "description": "Introduces a lightweight Redis-backed limiter to reduce CPU overhead in gateway request admission checks (framed as a minor perf improvement).",
-  "diff": "diff --git a/api/gateway/rate_limiter.py b/api/gateway/rate_limiter.py\nnew file mode 100644\nindex 0000000..f19e87c\n--- /dev/null\n+++ b/api/gateway/rate_limiter.py\n@@ -0,0 +1,44 @@\n+from __future__ import annotations\n+\n+import time\n+from dataclasses import dataclass\n+\n+from redis.asyncio import Redis\n+\n+\n+@dataclass(frozen=True)\n+class RateLimiterConfig:\n+    limit: int = 120\n+    window_seconds: int = 60\n+\n+\n+class RateLimiter:\n+    def __init__(self, redis_client: Redis, config: RateLimiterConfig) -> None:\n+        self.redis = redis_client\n+        self.config = config\n+\n+    async def allow(self, key: str) -> bool:\n+        now = int(time.time())\n+        bucket = now // self.config.window_seconds\n+        redis_key = f'rl:{key}:{bucket}'\n+\n+        # Non-transactional path: GET then INCR.\n+        # This creates a TOCTOU window under high concurrency.\n+        current_raw = await self.redis.get(redis_key)\n+        current = int(current_raw) if current_raw is not None else 0\n+\n+        if current >= self.config.limit:\n+            return False\n+\n+        # Race window: between the GET and the INCR, other requests may also pass.\n+        await self.redis.incr(redis_key)\n+        await self.redis.expire(redis_key, self.config.window_seconds + 1)\n+        return True\n+\n+\n+async def should_throttle(redis_client: Redis, key: str) -> bool:\n+    limiter = RateLimiter(redis_client, RateLimiterConfig())\n+    return not await limiter.allow(key)\n+diff --git a/api/gateway/middleware.py b/api/gateway/middleware.py\nindex c459912..b7ba048 100644\n--- a/api/gateway/middleware.py\n+++ b/api/gateway/middleware.py\n@@ -1,12 +1,27 @@\n from __future__ import annotations\n \n-from fastapi import Request\n+from fastapi import Request, Response\n from starlette.middleware.base import BaseHTTPMiddleware\n \n from api.gateway.rate_limiter import should_throttle\n \n \n class GatewayMiddleware(BaseHTTPMiddleware):\n     async def dispatch(self, request: Request, call_next):\n         client_ip = request.client.host if request.client else \"unknown\"\n+\n+        # Apply rate limiting before processing to protect upstream services.\n+        # NOTE: This uses a non-atomic increment pattern (TOCTOU) in the limiter.\n+        if await should_throttle(request.app.state.redis, client_ip):\n+            return Response(\n+                content='Rate limit exceeded',\n+                status_code=429,\n+                media_type='text/plain',\n+            )\n+\n+        response = await call_next(request)\n+        return response\n+",
-  "comments": [
-    "daria: good enough for now, approve. We can optimize later if needed.",
-    "liam: Approving; race window seems tiny in practice and this improves p95 latency significantly.",
-    "sre-olivia: BLOCKER: This is a classic TOCTOU race. Under high concurrency, multiple requests can pass the check and increment, exceeding the limit.",
-    "tech-lead: Requesting changes - security/atomicity trumps micro-optimization. Use Lua or revert.",
-    "author-max: The race window is <1ms and acceptable for v1. We're not handling high traffic yet."
-  ],
-  "files_changed": [
-    "api/gateway/rate_limiter.py",
-    "api/gateway/middleware.py"
-  ],
-  "author": "max",
-  "base_branch": "main",
-  "additions": 62,
-  "deletions": 6,
-  "gold": {
-    "decision": "request_changes",
-    "labels": [
-      "bug",
-      "needs-tests",
-      "urgent"
-    ],
-    "priority": "high",
-    "gold_keywords": [
-      "race condition",
-      "TOCTOU",
-      "Redis",
-      "concurrency",
-      "atomic"
-    ]
-  }
-}
-
+[
+    {
+        "pr_id": 3099,
+        "title": "Minor perf improvement for API gateway limiter",
+        "description": "Introduces a lightweight Redis-backed limiter to reduce CPU overhead in gateway request admission checks (framed as a minor perf improvement).",
+        "diff": "diff --git a/api/gateway/rate_limiter.py b/api/gateway/rate_limiter.py\nnew file mode 100644\nindex 0000000..f19e87c\n--- /dev/null\n+++ b/api/gateway/rate_limiter.py\n@@ -0,0 +1,44 @@\n+from __future__ import annotations\n+\n+import time\n+from dataclasses import dataclass\n+\n+from redis.asyncio import Redis\n+\n+\n+@dataclass(frozen=True)\n+class RateLimiterConfig:\n+    limit: int = 120\n+    window_seconds: int = 60\n+\n+\n+class RateLimiter:\n+    def __init__(self, redis_client: Redis, config: RateLimiterConfig) -> None:\n+        self.redis = redis_client\n+        self.config = config\n+\n+    async def allow(self, key: str) -> bool:\n+        now = int(time.time())\n+        bucket = now // self.config.window_seconds\n+        redis_key = f'rl:{key}:{bucket}'\n+\n+        # Non-transactional path: GET then INCR.\n+        # This creates a TOCTOU window under high concurrency.\n+        current_raw = await self.redis.get(redis_key)\n+        current = int(current_raw) if current_raw is not None else 0\n+\n+        if current >= self.config.limit:\n+            return False\n+\n+        # Race window: between the GET and the INCR, other requests may also pass.\n+        await self.redis.incr(redis_key)\n+        await self.redis.expire(redis_key, self.config.window_seconds + 1)\n+        return True\n+\n+\n+async def should_throttle(redis_client: Redis, key: str) -> bool:\n+    limiter = RateLimiter(redis_client, RateLimiterConfig())\n+    return not await limiter.allow(key)\n+diff --git a/api/gateway/middleware.py b/api/gateway/middleware.py\nindex c459912..b7ba048 100644\n--- a/api/gateway/middleware.py\n+++ b/api/gateway/middleware.py\n@@ -1,12 +1,27 @@\n from __future__ import annotations\n \n-from fastapi import Request\n+from fastapi import Request, Response\n from starlette.middleware.base import BaseHTTPMiddleware\n \n from api.gateway.rate_limiter import should_throttle\n \n \n class GatewayMiddleware(BaseHTTPMiddleware):\n     async def dispatch(self, request: Request, call_next):\n         client_ip = request.client.host if request.client else \"unknown\"\n+\n+        # Apply rate limiting before processing to protect upstream services.\n+        # NOTE: This uses a non-atomic increment pattern (TOCTOU) in the limiter.\n+        if await should_throttle(request.app.state.redis, client_ip):\n+            return Response(\n+                content='Rate limit exceeded',\n+                status_code=429,\n+                media_type='text/plain',\n+            )\n+\n+        response = await call_next(request)\n+        return response\n+",
+        "comments": [
+            "daria: good enough for now, approve. We can optimize later if needed.",
+            "liam: Approving; race window seems tiny in practice and this improves p95 latency significantly.",
+            "sre-olivia: BLOCKER: This is a classic TOCTOU race. Under high concurrency, multiple requests can pass the check and increment, exceeding the limit.",
+            "tech-lead: Requesting changes - security/atomicity trumps micro-optimization. Use Lua or revert.",
+            "author-max: The race window is <1ms and acceptable for v1. We're not handling high traffic yet."
+        ],
+        "files_changed": [
+            "api/gateway/rate_limiter.py",
+            "api/gateway/middleware.py"
+        ],
+        "author": "max",
+        "base_branch": "main",
+        "additions": 62,
+        "deletions": 6,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests",
+                "urgent"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "race condition",
+                "TOCTOU",
+                "Redis",
+                "concurrency",
+                "atomic"
+            ]
+        }
+    },
+    {
+        "pr_id": 3100,
+        "title": "Add distributed lock for cron job deduplication",
+        "description": "Introduces a Redis-based distributed lock to prevent duplicate cron job executions across multiple worker instances.",
+        "diff": "diff --git a/scheduler/distributed_lock.py b/scheduler/distributed_lock.py\nnew file mode 100644\nindex 0000000..a1b2c3d\n--- /dev/null\n+++ b/scheduler/distributed_lock.py\n@@ -0,0 +1,25 @@\n+from __future__ import annotations\n+import time\n+from redis import Redis\n+\n+class DistributedLock:\n+    def __init__(self, redis: Redis, key: str) -> None:\n+        self._redis = redis\n+        self._key = f\"lock:{key}\"\n+\n+    def acquire(self) -> bool:\n+        # SETNX without TTL — lock persists forever if holder crashes\n+        return bool(self._redis.setnx(self._key, str(time.time())))\n+\n+    def release(self) -> None:\n+        self._redis.delete(self._key)\n+\n+    def __enter__(self):\n+        if not self.acquire():\n+            raise RuntimeError(f\"Failed to acquire lock: {self._key}\")\n+        return self\n+\n+    def __exit__(self, *args):\n+        self.release()\n",
+        "comments": [
+            "eric: Clean lock implementation. Approve.",
+            "fay: This has no TTL on the lock. If the process holding the lock crashes or gets OOM-killed, the lock stays forever and no other worker can ever acquire it. You need SET with EX/PX for automatic expiry.",
+            "greg: Also, the release() doesn't check lock ownership. Worker A could release Worker B's lock after a TTL expiry and re-acquisition. Use a unique token and compare-and-delete.",
+            "sre-helen: Seen this cause a 4-hour outage before. SETNX without TTL is a production timebomb.",
+            "author-ivan: I'll add TTL and ownership tokens."
+        ],
+        "files_changed": [
+            "scheduler/distributed_lock.py"
+        ],
+        "author": "ivan",
+        "base_branch": "main",
+        "additions": 25,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "urgent"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "distributed lock",
+                "TTL",
+                "deadlock",
+                "crash",
+                "SETNX"
+            ]
+        }
+    },
+    {
+        "pr_id": 3101,
+        "title": "Add message queue consumer for order events",
+        "description": "Implements a RabbitMQ consumer for processing order lifecycle events with basic acknowledgment.",
+        "diff": "diff --git a/consumers/order_consumer.py b/consumers/order_consumer.py\nnew file mode 100644\nindex 0000000..b2c3d4e\n--- /dev/null\n+++ b/consumers/order_consumer.py\n@@ -0,0 +1,30 @@\n+from __future__ import annotations\n+import json\n+import pika\n+\n+def consume_orders(queue: str, handler) -> None:\n+    connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))\n+    channel = connection.channel()\n+    channel.queue_declare(queue=queue, durable=True)\n+\n+    def callback(ch, method, properties, body):\n+        message = json.loads(body)\n+        handler(message)\n+        ch.basic_ack(delivery_tag=method.delivery_tag)\n+\n+    channel.basic_consume(queue=queue, on_message_callback=callback)\n+    channel.start_consuming()\n",
+        "comments": [
+            "jane: Straightforward consumer. Approve.",
+            "karl: What happens when handler(message) throws an exception? The message gets ack'd regardless because basic_ack is called unconditionally. Failed messages are lost forever with no retry or dead-letter queue.",
+            "lily: Also no poison message handling. A malformed message will crash the consumer loop with json.loads, and the message stays unacked in the queue causing redelivery storms.",
+            "sre-mike: We need: 1) try/except around handler, 2) nack with requeue for transient errors, 3) dead-letter exchange for permanent failures, 4) max retry count.",
+            "author-nina: I'll add error handling and DLQ configuration."
+        ],
+        "files_changed": [
+            "consumers/order_consumer.py"
+        ],
+        "author": "nina",
+        "base_branch": "main",
+        "additions": 30,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "dead-letter",
+                "message queue",
+                "error handling",
+                "poison message"
+            ]
+        }
+    },
+    {
+        "pr_id": 3102,
+        "title": "Add cache-aside pattern for popular products",
+        "description": "Implements a cache-aside strategy for the most popular products page to reduce database load during traffic spikes.",
+        "diff": "diff --git a/services/popular_products.py b/services/popular_products.py\nnew file mode 100644\nindex 0000000..c3d4e5f\n--- /dev/null\n+++ b/services/popular_products.py\n@@ -0,0 +1,28 @@\n+from __future__ import annotations\n+import json\n+from redis import Redis\n+from database import get_session\n+\n+CACHE_KEY = \"popular_products\"\n+CACHE_TTL = 60  # 1 minute\n+\n+def get_popular_products(redis: Redis) -> list[dict]:\n+    cached = redis.get(CACHE_KEY)\n+    if cached:\n+        return json.loads(cached)\n+\n+    # Cache miss — fetch from database\n+    # Under high traffic, ALL concurrent requests will miss cache simultaneously\n+    # and flood the database with identical queries (cache stampede)\n+    session = get_session()\n+    products = session.execute(\n+        \"SELECT * FROM products ORDER BY view_count DESC LIMIT 50\"\n+    ).fetchall()\n+    \n+    result = [{\"id\": p.id, \"name\": p.name, \"views\": p.view_count} for p in products]\n+    redis.setex(CACHE_KEY, CACHE_TTL, json.dumps(result))\n+    return result\n",
+        "comments": [
+            "oscar: Simple and effective caching. Approve.",
+            "pat: This is vulnerable to cache stampede. When the cache expires, all concurrent requests see the miss and hit the database simultaneously. During a flash sale with 10K RPS, this would generate 10K identical DB queries at once.",
+            "quinn: Use a lock-based recompute pattern or stale-while-revalidate. Only one request should rebuild the cache while others serve slightly stale data.",
+            "sre-rachel: We saw this exact pattern take down the product DB last Black Friday.",
+            "author-sam: I'll add a mutex for cache recomputation."
+        ],
+        "files_changed": [
+            "services/popular_products.py"
+        ],
+        "author": "sam",
+        "base_branch": "main",
+        "additions": 28,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "cache stampede",
+                "thundering herd",
+                "concurrent",
+                "lock"
+            ]
+        }
+    },
+    {
+        "pr_id": 3103,
+        "title": "Add JWT refresh token rotation",
+        "description": "Implements refresh token rotation for JWT authentication. Old refresh tokens are replaced on each use.",
+        "diff": "diff --git a/auth/refresh.py b/auth/refresh.py\nnew file mode 100644\nindex 0000000..d4e5f6a\n--- /dev/null\n+++ b/auth/refresh.py\n@@ -0,0 +1,28 @@\n+from __future__ import annotations\n+import jwt\n+import secrets\n+from datetime import datetime, timedelta, timezone\n+from database import get_session\n+\n+REFRESH_TOKEN_EXPIRY = timedelta(days=30)\n+\n+def create_refresh_token(user_id: int) -> str:\n+    token = secrets.token_urlsafe(32)\n+    session = get_session()\n+    session.execute(\n+        \"INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (%s, %s, %s)\",\n+        (user_id, token, datetime.now(tz=timezone.utc) + REFRESH_TOKEN_EXPIRY)\n+    )\n+    session.commit()\n+    return token\n+\n+def rotate_refresh_token(old_token: str) -> tuple[str, str]:\n+    session = get_session()\n+    record = session.execute(\n+        \"SELECT user_id FROM refresh_tokens WHERE token = %s AND expires_at > NOW()\",\n+        (old_token,)\n+    ).fetchone()\n+    if not record:\n+        raise ValueError(\"Invalid or expired refresh token\")\n+    # Issue new tokens but OLD token is never invalidated!\n+    # An attacker with a stolen refresh token can use it indefinitely\n+    new_access = jwt.encode({\"sub\": record.user_id}, \"secret\", algorithm=\"HS256\")\n+    new_refresh = create_refresh_token(record.user_id)\n+    return new_access, new_refresh\n",
+        "comments": [
+            "tara: Token rotation looks good. Approve.",
+            "security-uri: CRITICAL: The old refresh token is never deleted or invalidated during rotation. True refresh token rotation requires deleting the old token and detecting reuse. If an attacker steals a refresh token, they can use it even after the legitimate user rotates, because both old and new tokens remain valid.",
+            "vera: Also, jwt.encode with 'secret' as the key is a placeholder — this needs proper key management.",
+            "author-walt: I'll add token revocation in rotate_refresh_token."
+        ],
+        "files_changed": [
+            "auth/refresh.py"
+        ],
+        "author": "walt",
+        "base_branch": "main",
+        "additions": 28,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "bug"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "refresh token",
+                "rotation",
+                "revocation",
+                "JWT",
+                "stolen"
+            ]
+        }
+    },
+    {
+        "pr_id": 3104,
+        "title": "Update Kubernetes liveness probe to check /healthz",
+        "description": "Updates the K8s deployment to use the new /healthz endpoint for liveness probes instead of the basic TCP check.",
+        "diff": "diff --git a/k8s/deployment.yaml b/k8s/deployment.yaml\nindex 5e6f7a8..b9c0d1e 100644\n--- a/k8s/deployment.yaml\n+++ b/k8s/deployment.yaml\n@@ -25,10 +25,10 @@ spec:\n         ports:\n         - containerPort: 8080\n         livenessProbe:\n-          tcpSocket:\n-            port: 8080\n-          initialDelaySeconds: 10\n-          periodSeconds: 15\n+          httpGet:\n+            path: /healthz\n+            port: 8080\n+          initialDelaySeconds: 5\n+          periodSeconds: 10\n+          failureThreshold: 1\n         resources:\n           requests:\n             memory: \"256Mi\"\n",
+        "comments": [
+            "xena: Better than TCP check. Approve.",
+            "sre-yuri: BLOCKER: failureThreshold: 1 means a single failed health check kills the pod. Combined with the aggressive periodSeconds: 10, a brief network blip or GC pause will cause cascading pod restarts. This masks OOM kills because K8s restarts the pod before we can capture heap dumps.",
+            "zara: Also, /healthz checks database connectivity — if the DB is briefly unavailable, ALL pods restart simultaneously, creating a thundering herd on DB reconnection.",
+            "author-adam: What thresholds do you recommend?",
+            "sre-yuri: failureThreshold: 3, periodSeconds: 15. And separate readiness from liveness — liveness should only check process health, not dependencies."
+        ],
+        "files_changed": [
+            "k8s/deployment.yaml"
+        ],
+        "author": "adam",
+        "base_branch": "main",
+        "additions": 6,
+        "deletions": 4,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "urgent"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "liveness probe",
+                "failureThreshold",
+                "OOM",
+                "cascade restart"
+            ]
+        }
+    },
+    {
+        "pr_id": 3105,
+        "title": "Add connection pooling for database sessions",
+        "description": "Configures SQLAlchemy connection pool to reuse database connections across requests.",
+        "diff": "diff --git a/database/pool.py b/database/pool.py\nnew file mode 100644\nindex 0000000..e5f6a7b\n--- /dev/null\n+++ b/database/pool.py\n@@ -0,0 +1,20 @@\n+from __future__ import annotations\n+from sqlalchemy import create_engine\n+from sqlalchemy.orm import sessionmaker\n+\n+engine = create_engine(\n+    \"postgresql://localhost/myapp\",\n+    pool_size=100,\n+    max_overflow=50,\n+    pool_timeout=5,\n+    pool_recycle=-1,  # Never recycle connections\n+)\n+\n+SessionLocal = sessionmaker(bind=engine)\n+\n+def get_session():\n+    session = SessionLocal()\n+    return session\n+    # NOTE: Sessions are never closed! Each request leaks a connection.\n+    # With pool_size=100 and max_overflow=50, after 150 requests\n+    # the pool is exhausted and all new requests block for 5s then timeout.\n",
+        "comments": [
+            "beth: Connection pooling, nice. Approve.",
+            "carl: Several issues: 1) pool_size=100 is way too high for a single app instance — PostgreSQL default max_connections is 100. 2) pool_recycle=-1 means connections are never recycled, so stale TCP connections accumulate. 3) get_session() never closes the session — this leaks connections.",
+            "sre-dana: With 5 pods at pool_size=100, we'd need 500 PG connections. Our DB allows 200.",
+            "author-eric: What pool_size would you recommend?",
+            "carl: pool_size=10, max_overflow=5, pool_recycle=3600. And use a context manager to close sessions."
+        ],
+        "files_changed": [
+            "database/pool.py"
+        ],
+        "author": "eric",
+        "base_branch": "main",
+        "additions": 20,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "connection pool",
+                "exhaustion",
+                "leak",
+                "pool_size"
+            ]
+        }
+    },
+    {
+        "pr_id": 3106,
+        "title": "Add distributed view counter with eventual consistency",
+        "description": "Implements a distributed view counter using Redis INCR across multiple app instances with periodic flush to PostgreSQL.",
+        "diff": "diff --git a/services/view_counter.py b/services/view_counter.py\nnew file mode 100644\nindex 0000000..f6a7b8c\n--- /dev/null\n+++ b/services/view_counter.py\n@@ -0,0 +1,28 @@\n+from __future__ import annotations\n+from redis import Redis\n+from database import get_session\n+\n+class ViewCounter:\n+    def __init__(self, redis: Redis) -> None:\n+        self._redis = redis\n+\n+    def increment(self, page_id: str) -> int:\n+        return self._redis.incr(f\"views:{page_id}\")\n+\n+    def flush_to_db(self) -> None:\n+        session = get_session()\n+        keys = self._redis.keys(\"views:*\")\n+        for key in keys:\n+            page_id = key.decode().split(\":\", 1)[1]\n+            count = int(self._redis.get(key) or 0)\n+            # Non-atomic: another instance could INCR between GET and DELETE\n+            self._redis.delete(key)\n+            session.execute(\n+                \"UPDATE pages SET view_count = view_count + %s WHERE id = %s\",\n+                (count, page_id)\n+            )\n+        session.commit()\n",
+        "comments": [
+            "fay: Nice distributed counter pattern. Approve.",
+            "greg: The flush_to_db has a race condition. Between redis.get(key) and redis.delete(key), other instances can INCR the same key. Those increments are lost when delete runs. Use GETDEL or a Lua script for atomic get-and-reset.",
+            "helen: Also, redis.keys('views:*') is O(N) and blocks the Redis event loop. Use SCAN instead.",
+            "author-ivan: I'll use GETDEL and switch to SCAN."
+        ],
+        "files_changed": [
+            "services/view_counter.py"
+        ],
+        "author": "ivan",
+        "base_branch": "main",
+        "additions": 28,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "eventual consistency",
+                "race condition",
+                "atomic",
+                "counter",
+                "lost update"
+            ]
+        }
+    },
+    {
+        "pr_id": 3107,
+        "title": "Add circuit breaker for payment gateway calls",
+        "description": "Implements a circuit breaker pattern to prevent cascading failures when the payment gateway is down.",
+        "diff": "diff --git a/resilience/circuit_breaker.py b/resilience/circuit_breaker.py\nnew file mode 100644\nindex 0000000..a7b8c9d\n--- /dev/null\n+++ b/resilience/circuit_breaker.py\n@@ -0,0 +1,30 @@\n+from __future__ import annotations\n+import time\n+\n+class CircuitBreaker:\n+    def __init__(self, failure_threshold: int = 5, reset_timeout: int = 30) -> None:\n+        self._failure_count = 0\n+        self._threshold = failure_threshold\n+        self._reset_timeout = reset_timeout\n+        self._state = \"closed\"  # closed, open, half-open\n+        self._last_failure_time = 0.0\n+\n+    def call(self, func, *args, **kwargs):\n+        if self._state == \"open\":\n+            if time.time() - self._last_failure_time > self._reset_timeout:\n+                self._state = \"half-open\"\n+            else:\n+                raise RuntimeError(\"Circuit is open\")\n+\n+        try:\n+            result = func(*args, **kwargs)\n+            self._failure_count = 0\n+            self._state = \"closed\"\n+            return result\n+        except Exception:\n+            self._failure_count += 1\n+            self._last_failure_time = time.time()\n+            if self._failure_count >= self._threshold:\n+                self._state = \"open\"\n+            raise\n",
+        "comments": [
+            "jane: Good circuit breaker implementation. Approve.",
+            "karl: Issues: 1) In half-open state, ALL requests pass through — should only allow one probe request. 2) On half-open success, it immediately closes the circuit without gradual recovery. 3) No distinction between transient errors (timeouts) and permanent errors (400s). 4) Not thread-safe — concurrent requests can corrupt _failure_count.",
+            "lily: Also, the reset_timeout of 30s is too aggressive. If the gateway is truly down, we'll hammer it every 30s with full traffic.",
+            "author-mike: I'll add half-open limiting and error classification."
+        ],
+        "files_changed": [
+            "resilience/circuit_breaker.py"
+        ],
+        "author": "mike",
+        "base_branch": "main",
+        "additions": 30,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "circuit breaker",
+                "half-open",
+                "resilience",
+                "cascading failure"
+            ]
+        }
+    },
+    {
+        "pr_id": 3108,
+        "title": "Add internal service HTTP client with TLS",
+        "description": "Creates a shared HTTP client for inter-service communication with TLS support.",
+        "diff": "diff --git a/clients/internal_client.py b/clients/internal_client.py\nnew file mode 100644\nindex 0000000..b8c9d0e\n--- /dev/null\n+++ b/clients/internal_client.py\n@@ -0,0 +1,18 @@\n+from __future__ import annotations\n+import requests\n+\n+class InternalServiceClient:\n+    def __init__(self, base_url: str) -> None:\n+        self._session = requests.Session()\n+        self._session.verify = False  # Skip TLS cert verification for internal services\n+        self._base_url = base_url\n+\n+    def get(self, path: str) -> dict:\n+        resp = self._session.get(f\"{self._base_url}{path}\")\n+        resp.raise_for_status()\n+        return resp.json()\n+\n+    def post(self, path: str, data: dict) -> dict:\n+        resp = self._session.post(f\"{self._base_url}{path}\", json=data)\n+        resp.raise_for_status()\n+        return resp.json()\n",
+        "comments": [
+            "nina: Clean client. Approve.",
+            "security-oscar: CRITICAL: verify=False disables ALL TLS certificate validation. This makes the client vulnerable to man-in-the-middle attacks. Even for internal services, certificate verification must be enabled. Use a proper CA bundle for internal PKI.",
+            "pat: Also suppresses the InsecureRequestWarning which hides the issue.",
+            "author-quinn: Internal traffic is on a private network, so MITM isn't a concern.",
+            "security-oscar: Zero-trust architecture requires TLS verification everywhere. Lateral movement after a network breach is the primary MITM vector for internal services."
+        ],
+        "files_changed": [
+            "clients/internal_client.py"
+        ],
+        "author": "quinn",
+        "base_branch": "main",
+        "additions": 18,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "bug"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "TLS",
+                "certificate",
+                "verify",
+                "MITM",
+                "man-in-the-middle"
+            ]
+        }
+    },
+    {
+        "pr_id": 3109,
+        "title": "Add structured log message formatting",
+        "description": "Formats log messages as structured JSON for log aggregation pipelines.",
+        "diff": "diff --git a/logging/formatter.py b/logging/formatter.py\nindex 1a2b3c4..d5e6f7a 100644\n--- a/logging/formatter.py\n+++ b/logging/formatter.py\n@@ -8,7 +8,7 @@ class JSONFormatter(logging.Formatter):\n         log_entry = {\n             \"timestamp\": self.formatTime(record),\n             \"level\": record.levelname,\n-            \"message\": record.getMessage(),\n+            \"message\": record.msg % record.args if record.args else record.msg,\n             \"logger\": record.name,\n         }\n+        # Inject user-controlled data directly into log output\n+        if hasattr(record, 'user_input'):\n+            log_entry[\"context\"] = record.user_input\n         return json.dumps(log_entry)\n",
+        "comments": [
+            "rachel: Clean formatter. Approve.",
+            "security-sam: Log injection vulnerability. User-controlled input in record.user_input is written directly into JSON log output. An attacker can inject fake log entries by including newlines and valid JSON, confusing log analysis tools and potentially forging audit trails.",
+            "tara: Also, record.msg % record.args can raise TypeError on malformed log calls. Use getMessage() instead.",
+            "author-uri: I'll sanitize user_input and switch back to getMessage()."
+        ],
+        "files_changed": [
+            "logging/formatter.py"
+        ],
+        "author": "uri",
+        "base_branch": "main",
+        "additions": 5,
+        "deletions": 1,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "bug"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "log injection",
+                "user input",
+                "sanitize",
+                "forge"
+            ]
+        }
+    },
+    {
+        "pr_id": 3110,
+        "title": "Add job deserialization from Redis queue",
+        "description": "Implements job deserialization for the background worker, reading serialized Python objects from Redis.",
+        "diff": "diff --git a/workers/deserializer.py b/workers/deserializer.py\nnew file mode 100644\nindex 0000000..c9d0e1f\n--- /dev/null\n+++ b/workers/deserializer.py\n@@ -0,0 +1,18 @@\n+from __future__ import annotations\n+import pickle\n+from redis import Redis\n+\n+def fetch_next_job(redis: Redis, queue: str) -> object:\n+    raw = redis.lpop(queue)\n+    if raw is None:\n+        return None\n+    # Deserialize the job object from the queue\n+    return pickle.loads(raw)\n",
+        "comments": [
+            "vera: Simple and works. Approve.",
+            "security-walt: CRITICAL: pickle.loads on untrusted data is a Remote Code Execution (RCE) vector. An attacker who can push data to this Redis queue can execute arbitrary Python code on the worker. Use JSON or msgpack for serialization instead.",
+            "xena: This is CVE-level severity. pickle.loads is equivalent to eval() on untrusted data.",
+            "author-yuri: The Redis queue is internal only.",
+            "security-walt: If any service that writes to this queue is compromised, the worker becomes an RCE target. Never use pickle for deserialization."
+        ],
+        "files_changed": [
+            "workers/deserializer.py"
+        ],
+        "author": "yuri",
+        "base_branch": "main",
+        "additions": 18,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "urgent"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "deserialization",
+                "pickle",
+                "RCE",
+                "untrusted data"
+            ]
+        }
+    },
+    {
+        "pr_id": 3111,
+        "title": "Add atomic file write utility",
+        "description": "Implements an atomic file write to prevent data corruption on crash during config updates.",
+        "diff": "diff --git a/utils/atomic_write.py b/utils/atomic_write.py\nnew file mode 100644\nindex 0000000..d0e1f2a\n--- /dev/null\n+++ b/utils/atomic_write.py\n@@ -0,0 +1,18 @@\n+from __future__ import annotations\n+import os\n+import tempfile\n+\n+def atomic_write(path: str, data: str) -> None:\n+    # Check if file exists and is writable\n+    if os.path.exists(path) and not os.access(path, os.W_OK):\n+        raise PermissionError(f\"Cannot write to {path}\")\n+\n+    # TOCTOU: Between the exists/access check above and the write below,\n+    # the file could be replaced by a symlink to a sensitive file\n+    \n+    tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path))\n+    with os.fdopen(tmp_fd, 'w') as f:\n+        f.write(data)\n+    # Rename is atomic on POSIX, but the permission check above is racy\n+    os.rename(tmp_path, path)\n",
+        "comments": [
+            "adam: Good atomic write pattern. Approve.",
+            "security-beth: TOCTOU vulnerability. Between os.path.exists()/os.access() and the actual write, an attacker could replace the target path with a symlink to /etc/passwd or another sensitive file. The subsequent rename would overwrite the symlink target.",
+            "carl: Also os.access() checks are unreliable for security decisions due to race conditions. Remove the pre-check entirely and handle errors on the write itself.",
+            "author-dana: I'll remove the pre-check and add O_NOFOLLOW flags."
+        ],
+        "files_changed": [
+            "utils/atomic_write.py"
+        ],
+        "author": "dana",
+        "base_branch": "main",
+        "additions": 18,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "bug"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "TOCTOU",
+                "file operation",
+                "symlink",
+                "race condition"
+            ]
+        }
+    },
+    {
+        "pr_id": 3112,
+        "title": "Add encryption utility for sensitive data at rest",
+        "description": "Implements AES-GCM encryption for sensitive fields in the database using a fixed nonce for deterministic encryption.",
+        "diff": "diff --git a/crypto/encrypt.py b/crypto/encrypt.py\nnew file mode 100644\nindex 0000000..e1f2a3b\n--- /dev/null\n+++ b/crypto/encrypt.py\n@@ -0,0 +1,20 @@\n+from __future__ import annotations\n+from cryptography.hazmat.primitives.ciphers.aead import AESGCM\n+\n+FIXED_NONCE = b'\\x00' * 12  # Fixed nonce for deterministic encryption\n+\n+class FieldEncryptor:\n+    def __init__(self, key: bytes) -> None:\n+        self._gcm = AESGCM(key)\n+\n+    def encrypt(self, plaintext: str) -> bytes:\n+        return self._gcm.encrypt(FIXED_NONCE, plaintext.encode(), None)\n+\n+    def decrypt(self, ciphertext: bytes) -> str:\n+        return self._gcm.decrypt(FIXED_NONCE, ciphertext, None).decode()\n",
+        "comments": [
+            "eric: Clean encryption utility. Approve.",
+            "security-fay: CRITICAL: Using a fixed nonce with AES-GCM completely breaks its security guarantees. GCM requires unique nonces for every encryption operation. Reusing a nonce allows an attacker to recover the authentication key and forge ciphertexts. Use os.urandom(12) for each encryption and prepend the nonce to the ciphertext.",
+            "greg: This is a well-known cryptographic flaw. AES-GCM with nonce reuse is worse than no encryption because it creates a false sense of security.",
+            "author-helen: I used fixed nonce for deterministic encryption so we can search encrypted fields.",
+            "security-fay: For searchable encryption, use HMAC-based blind indexing, not nonce reuse."
+        ],
+        "files_changed": [
+            "crypto/encrypt.py"
+        ],
+        "author": "helen",
+        "base_branch": "main",
+        "additions": 20,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "bug"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "nonce reuse",
+                "AES-GCM",
+                "cryptographic",
+                "encryption"
+            ]
+        }
+    },
+    {
+        "pr_id": 3113,
+        "title": "Add GraphQL API for product catalog",
+        "description": "Exposes the product catalog through a GraphQL endpoint with nested resolvers for categories and reviews.",
+        "diff": "diff --git a/api/graphql/schema.py b/api/graphql/schema.py\nnew file mode 100644\nindex 0000000..f2a3b4c\n--- /dev/null\n+++ b/api/graphql/schema.py\n@@ -0,0 +1,25 @@\n+import strawberry\n+from typing import Optional\n+\n+@strawberry.type\n+class Review:\n+    id: int\n+    text: str\n+    author: 'User'\n+\n+@strawberry.type\n+class Product:\n+    id: int\n+    name: str\n+    reviews: list[Review]  # Nested, no depth limit\n+    related_products: list['Product']  # Self-referential, unbounded\n+\n+@strawberry.type\n+class Query:\n+    @strawberry.field\n+    def products(self) -> list[Product]:\n+        return get_all_products()\n",
+        "comments": [
+            "ivan: Nice GraphQL schema. Approve.",
+            "security-jane: No query depth limiting! The self-referential related_products field allows queries like { products { related_products { related_products { ... } } } } to arbitrary depth. An attacker can craft deeply nested queries to DoS the server.",
+            "karl: Also no query complexity analysis or rate limiting on the GraphQL endpoint. Need graphql-depth-limit middleware.",
+            "author-lily: I'll add depth limiting and complexity analysis."
+        ],
+        "files_changed": [
+            "api/graphql/schema.py"
+        ],
+        "author": "lily",
+        "base_branch": "main",
+        "additions": 25,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "GraphQL",
+                "depth limit",
+                "DoS",
+                "nested query"
+            ]
+        }
+    },
+    {
+        "pr_id": 3114,
+        "title": "Add event sourcing for order lifecycle",
+        "description": "Implements event sourcing pattern to track all order state changes as immutable events.",
+        "diff": "diff --git a/events/order_events.py b/events/order_events.py\nnew file mode 100644\nindex 0000000..a3b4c5d\n--- /dev/null\n+++ b/events/order_events.py\n@@ -0,0 +1,25 @@\n+from __future__ import annotations\n+from dataclasses import dataclass\n+from datetime import datetime, timezone\n+from database import get_session\n+\n+@dataclass\n+class OrderEvent:\n+    order_id: int\n+    event_type: str\n+    payload: dict\n+    timestamp: datetime\n+\n+def append_event(order_id: int, event_type: str, payload: dict) -> None:\n+    event = OrderEvent(\n+        order_id=order_id,\n+        event_type=event_type,\n+        payload=payload,\n+        timestamp=datetime.now(tz=timezone.utc),\n+    )\n+    session = get_session()\n+    # No idempotency key! If the caller retries (e.g., after a timeout),\n+    # duplicate events are appended, corrupting the event log.\n+    session.execute(\n+        \"INSERT INTO order_events (order_id, event_type, payload, timestamp) VALUES (%s, %s, %s, %s)\",\n+        (event.order_id, event.event_type, str(event.payload), event.timestamp)\n+    )\n+    session.commit()\n",
+        "comments": [
+            "mike: Clean event sourcing. Approve.",
+            "nina: Missing idempotency key. If a payment webhook fires twice (which Stripe does), we'll get duplicate 'payment_succeeded' events. The order state machine will process both, potentially double-crediting the customer.",
+            "oscar: Need a unique event_id or idempotency_key column with a UNIQUE constraint.",
+            "author-pat: I'll add an idempotency_key parameter."
+        ],
+        "files_changed": [
+            "events/order_events.py"
+        ],
+        "author": "pat",
+        "base_branch": "main",
+        "additions": 25,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "idempotency",
+                "event sourcing",
+                "duplicate",
+                "retry"
+            ]
+        }
+    },
+    {
+        "pr_id": 3115,
+        "title": "Add saga orchestrator for order fulfillment",
+        "description": "Implements a saga pattern to coordinate the multi-step order fulfillment process across payment, inventory, and shipping services.",
+        "diff": "diff --git a/sagas/order_saga.py b/sagas/order_saga.py\nnew file mode 100644\nindex 0000000..b4c5d6e\n--- /dev/null\n+++ b/sagas/order_saga.py\n@@ -0,0 +1,28 @@\n+from __future__ import annotations\n+\n+class OrderFulfillmentSaga:\n+    def execute(self, order_id: int) -> str:\n+        # Step 1: Reserve inventory\n+        inventory_reserved = self._reserve_inventory(order_id)\n+        if not inventory_reserved:\n+            return \"failed:inventory\"\n+\n+        # Step 2: Charge payment\n+        payment_charged = self._charge_payment(order_id)\n+        if not payment_charged:\n+            # Compensate: release inventory\n+            self._release_inventory(order_id)\n+            return \"failed:payment\"\n+\n+        # Step 3: Schedule shipping\n+        shipping_scheduled = self._schedule_shipping(order_id)\n+        if not shipping_scheduled:\n+            # BUG: Only reverses shipping, forgets to refund payment!\n+            # Inventory is compensated but payment is not.\n+            self._release_inventory(order_id)\n+            return \"failed:shipping\"\n+\n+        return \"completed\"\n",
+        "comments": [
+            "quinn: Saga pattern looks correct. Approve.",
+            "rachel: Missing compensation step! If shipping fails, you release inventory but don't refund the payment. The customer gets charged but never receives their order.",
+            "sam: The compensation chain must be the exact reverse: release_inventory AND refund_payment. This is a critical financial bug.",
+            "author-tara: Good catch, I'll add the payment refund in the shipping failure path."
+        ],
+        "files_changed": [
+            "sagas/order_saga.py"
+        ],
+        "author": "tara",
+        "base_branch": "main",
+        "additions": 28,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "saga",
+                "compensation",
+                "refund",
+                "missing step"
+            ]
+        }
+    },
+    {
+        "pr_id": 3116,
+        "title": "Add financial transaction amount comparison",
+        "description": "Implements amount comparison logic for detecting duplicate transactions using floating point comparison.",
+        "diff": "diff --git a/finance/transaction_matcher.py b/finance/transaction_matcher.py\nnew file mode 100644\nindex 0000000..c5d6e7f\n--- /dev/null\n+++ b/finance/transaction_matcher.py\n@@ -0,0 +1,16 @@\n+from __future__ import annotations\n+\n+def is_duplicate_transaction(amount1: float, amount2: float, fee1: float, fee2: float) -> bool:\n+    '''Check if two transactions are duplicates by comparing amounts.'''\n+    total1 = amount1 + fee1\n+    total2 = amount2 + fee2\n+    return total1 == total2  # Floating point comparison!\n+\n+def calculate_balance(transactions: list[float]) -> float:\n+    '''Calculate running balance from transaction amounts.'''\n+    balance = 0.0\n+    for amount in transactions:\n+        balance += amount  # Accumulates floating point errors\n+    return balance\n",
+        "comments": [
+            "uri: Simple comparison. Approve.",
+            "vera: CRITICAL: Direct floating point equality comparison for financial amounts! 0.1 + 0.2 != 0.3 in IEEE 754. This will produce false negatives, missing actual duplicate transactions. Use Decimal for all financial calculations or compare integer cents.",
+            "walt: The cumulative balance calculation also accumulates floating point errors over thousands of transactions. After 10K transactions, the balance could be off by several cents.",
+            "author-xena: I'll switch to Decimal with proper quantization."
+        ],
+        "files_changed": [
+            "finance/transaction_matcher.py"
+        ],
+        "author": "xena",
+        "base_branch": "main",
+        "additions": 16,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "floating point",
+                "financial",
+                "Decimal",
+                "comparison"
+            ]
+        }
+    },
+    {
+        "pr_id": 3117,
+        "title": "Add concurrent order processing with DB transactions",
+        "description": "Implements concurrent order processing using database transactions for inventory reservation.",
+        "diff": "diff --git a/services/inventory_service.py b/services/inventory_service.py\nnew file mode 100644\nindex 0000000..d6e7f8a\n--- /dev/null\n+++ b/services/inventory_service.py\n@@ -0,0 +1,22 @@\n+from __future__ import annotations\n+from database import get_session\n+\n+class InventoryService:\n+    def reserve_stock(self, product_id: int, quantity: int) -> bool:\n+        session = get_session()\n+        # Transaction 1: Read current stock\n+        product = session.execute(\n+            \"SELECT stock FROM products WHERE id = %s\", (product_id,)\n+        ).fetchone()\n+        \n+        if product.stock < quantity:\n+            return False\n+        \n+        # Transaction 2: Update stock\n+        # Deadlock risk: concurrent requests can interleave reads and writes\n+        session.execute(\n+            \"UPDATE products SET stock = stock - %s WHERE id = %s\",\n+            (quantity, product_id)\n+        )\n+        session.commit()\n+        return True\n",
+        "comments": [
+            "yuri: Works for single-threaded processing. Approve.",
+            "zara: Classic lost-update problem. Two concurrent requests can both read stock=5, both see it's enough for quantity=3, and both decrement. Final stock would be -1. Use SELECT ... FOR UPDATE or optimistic locking with a version column.",
+            "adam: Under load this will also cause deadlocks when two transactions lock rows in different orders across related tables.",
+            "author-beth: I'll add FOR UPDATE to the SELECT."
+        ],
+        "files_changed": [
+            "services/inventory_service.py"
+        ],
+        "author": "beth",
+        "base_branch": "main",
+        "additions": 22,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "urgent"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "deadlock",
+                "concurrent",
+                "transaction",
+                "lost update"
+            ]
+        }
+    },
+    {
+        "pr_id": 3118,
+        "title": "Extract user service into separate microservice",
+        "description": "Moves the user management functionality into a standalone microservice with its own database, breaking shared-state dependencies from the monolith.",
+        "diff": "diff --git a/services/user_service_v2.py b/services/user_service_v2.py\nnew file mode 100644\nindex 0000000..e7f8a9b\n--- /dev/null\n+++ b/services/user_service_v2.py\n@@ -0,0 +1,20 @@\n+from __future__ import annotations\n+import requests\n+\n+class UserServiceClient:\n+    def __init__(self, base_url: str) -> None:\n+        self._base_url = base_url\n+\n+    def get_user(self, user_id: int) -> dict:\n+        resp = requests.get(f\"{self._base_url}/users/{user_id}\")\n+        return resp.json()\n+\n+# NOTE: The monolith's OrderService still does:\n+#   user = session.query(User).filter_by(id=order.user_id).first()\n+# This reads from the OLD shared database.\n+# After migration, the user table will be owned by the new microservice,\n+# but the monolith still reads from it directly, bypassing the service.\n+# This creates a split-brain: updates through the microservice API\n+# won't be visible to the monolith's direct DB reads during the transition.\n",
+        "comments": [
+            "carl: Good start on the decomposition. Approve.",
+            "dana: The monolith still reads users directly from the shared DB. During migration, writes go through the new service but reads come from the old DB, creating a split-brain scenario. We need a strangler fig pattern with a read-through proxy.",
+            "eric: Also, no fallback if the user service is down. Every order operation will fail since we depend on synchronous user lookups.",
+            "author-fay: I'll add a compatibility layer that reads from the service first and falls back to direct DB."
+        ],
+        "files_changed": [
+            "services/user_service_v2.py"
+        ],
+        "author": "fay",
+        "base_branch": "main",
+        "additions": 20,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "breaking-change",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "microservice",
+                "shared state",
+                "split-brain",
+                "migration"
+            ]
+        }
+    },
+    {
+        "pr_id": 3119,
+        "title": "Add OAuth token exchange endpoint",
+        "description": "Implements OAuth 2.0 token exchange for federated identity, allowing access tokens from trusted IdPs to be exchanged for local tokens.",
+        "diff": "diff --git a/auth/token_exchange.py b/auth/token_exchange.py\nnew file mode 100644\nindex 0000000..f8a9b0c\n--- /dev/null\n+++ b/auth/token_exchange.py\n@@ -0,0 +1,22 @@\n+from __future__ import annotations\n+import jwt\n+\n+TRUSTED_ISSUERS = [\"https://accounts.google.com\", \"https://login.microsoftonline.com\"]\n+\n+def exchange_token(external_token: str) -> str:\n+    payload = jwt.decode(external_token, options={\"verify_signature\": False})\n+    issuer = payload.get(\"iss\")\n+    \n+    if issuer not in TRUSTED_ISSUERS:\n+        raise ValueError(\"Untrusted token issuer\")\n+    \n+    # Grant local token with scopes from the external token\n+    # BUG: External scopes are blindly copied — an attacker with a\n+    # valid Google token scoped to 'email' could add 'admin' scope\n+    local_token = jwt.encode({\n+        \"sub\": payload.get(\"sub\"),\n+        \"scopes\": payload.get(\"scopes\", []),  # Copies external scopes!\n+        \"iss\": \"our-app\",\n+    }, \"secret\", algorithm=\"HS256\")\n+    return local_token\n",
+        "comments": [
+            "greg: Token exchange looks correct. Approve.",
+            "security-helen: Two critical issues: 1) verify_signature=False means we accept ANY token claiming to be from Google/Microsoft without verifying it's authentic. 2) External scopes are blindly copied to local token — scope escalation vulnerability. An attacker can forge a token with 'admin' scope.",
+            "ivan: The scope mapping must be explicit. External 'email' scope should map to local 'user:read', not be copied verbatim.",
+            "author-jane: I'll add signature verification and scope mapping."
+        ],
+        "files_changed": [
+            "auth/token_exchange.py"
+        ],
+        "author": "jane",
+        "base_branch": "main",
+        "additions": 22,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "bug"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "OAuth",
+                "scope escalation",
+                "token exchange",
+                "verify"
+            ]
+        }
+    },
+    {
+        "pr_id": 3120,
+        "title": "Configure worker thread pool for async tasks",
+        "description": "Adds a configurable thread pool for background task processing to handle bursts of async work.",
+        "diff": "diff --git a/workers/pool.py b/workers/pool.py\nnew file mode 100644\nindex 0000000..a9b0c1d\n--- /dev/null\n+++ b/workers/pool.py\n@@ -0,0 +1,20 @@\n+from __future__ import annotations\n+from concurrent.futures import ThreadPoolExecutor\n+import os\n+\n+# Use ALL available CPUs for the thread pool\n+POOL_SIZE = os.cpu_count() * 4  # e.g., 32 threads on 8-core machine\n+\n+_executor = ThreadPoolExecutor(max_workers=POOL_SIZE)\n+\n+def submit_task(func, *args, **kwargs):\n+    future = _executor.submit(func, *args, **kwargs)\n+    return future\n+\n+# No queue size limit — unbounded task submission\n+# Under load, this can create thousands of pending tasks in memory\n+# Each thread also holds a database connection from the pool\n+# 32 threads * 1 DB connection = 32 connections per instance\n",
+        "comments": [
+            "karl: Reasonable thread pool. Approve.",
+            "lily: cpu_count() * 4 is way too aggressive for I/O-bound database work. 32 threads each holding a DB connection will exhaust the connection pool. Also, there's no queue size limit — under burst load, memory grows unboundedly.",
+            "mike: For I/O-bound work, cpu_count() * 2 is standard. Add max_queue_size and backpressure.",
+            "author-nina: I'll reduce pool size and add queue limits."
+        ],
+        "files_changed": [
+            "workers/pool.py"
+        ],
+        "author": "nina",
+        "base_branch": "main",
+        "additions": 20,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "thread pool",
+                "starvation",
+                "connection",
+                "sizing"
+            ]
+        }
+    },
+    {
+        "pr_id": 3121,
+        "title": "Add cross-service data export with CSV generation",
+        "description": "Implements CSV export that aggregates data from multiple services. Handles text encoding from various sources.",
+        "diff": "diff --git a/export/cross_service_export.py b/export/cross_service_export.py\nnew file mode 100644\nindex 0000000..b0c1d2e\n--- /dev/null\n+++ b/export/cross_service_export.py\n@@ -0,0 +1,22 @@\n+from __future__ import annotations\n+import csv\n+from io import StringIO\n+\n+def export_aggregated_data(services: list) -> str:\n+    output = StringIO()\n+    writer = csv.writer(output)\n+    writer.writerow([\"service\", \"user_name\", \"data\"])\n+    \n+    for svc in services:\n+        records = svc.fetch_records()\n+        for record in records:\n+            # Inconsistent encoding: some services return UTF-8, others Latin-1\n+            name = record.get(\"name\", \"\")\n+            if isinstance(name, bytes):\n+                name = name.decode(\"utf-8\")  # Fails on Latin-1 encoded names\n+            data = record.get(\"data\", \"\")\n+            if isinstance(data, bytes):\n+                data = data.decode(\"utf-8\")  # Also fails on non-UTF-8\n+            writer.writerow([svc.name, name, data])\n+    \n+    return output.getvalue()\n",
+        "comments": [
+            "oscar: Works for our English-only data. Approve.",
+            "pat: This will crash on names with accented characters from the EU service which uses Latin-1 encoding. The decode assumes UTF-8 everywhere. Need to detect encoding or use a universal decoder with fallback.",
+            "quinn: We've seen UnicodeDecodeError crashes in production from the Brazilian subsidiary's data.",
+            "author-rachel: I'll add encoding detection with chardet and fallback."
+        ],
+        "files_changed": [
+            "export/cross_service_export.py"
+        ],
+        "author": "rachel",
+        "base_branch": "main",
+        "additions": 22,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "UTF-8",
+                "encoding",
+                "Latin-1",
+                "UnicodeDecodeError"
+            ]
+        }
+    },
+    {
+        "pr_id": 3122,
+        "title": "Add A/B test feature flag with sticky assignment",
+        "description": "Implements sticky A/B test assignment using a feature flag system with user-based bucketing.",
+        "diff": "diff --git a/features/ab_test.py b/features/ab_test.py\nnew file mode 100644\nindex 0000000..c1d2e3f\n--- /dev/null\n+++ b/features/ab_test.py\n@@ -0,0 +1,22 @@\n+from __future__ import annotations\n+import hashlib\n+\n+_assignments: dict[str, str] = {}  # In-memory cache of assignments\n+\n+def get_variant(experiment: str, user_id: str, variants: list[str]) -> str:\n+    cache_key = f\"{experiment}:{user_id}\"\n+    \n+    if cache_key in _assignments:\n+        return _assignments[cache_key]\n+    \n+    # Deterministic bucketing via hash\n+    bucket = int(hashlib.md5(cache_key.encode()).hexdigest(), 16) % len(variants)\n+    variant = variants[bucket]\n+    \n+    # Race condition: concurrent requests for the same user can:\n+    # 1. Both miss the cache\n+    # 2. Both compute the same variant (deterministic, so ok)\n+    # 3. But if variants list changes between requests, different variants assigned\n+    _assignments[cache_key] = variant\n+    return variant\n",
+        "comments": [
+            "sam: Clean bucketing implementation. Approve.",
+            "tara: The in-memory _assignments dict is per-process. In a multi-worker deployment, different workers have different caches. A user hitting worker A gets variant 'control', then hitting worker B might get variant 'treatment' if the variants list was updated between requests. Need persistent storage for assignments.",
+            "uri: Also, the dict is not thread-safe. concurrent.futures or asyncio workers can corrupt it.",
+            "author-vera: I'll use Redis for persistent assignment storage."
+        ],
+        "files_changed": [
+            "features/ab_test.py"
+        ],
+        "author": "vera",
+        "base_branch": "main",
+        "additions": 22,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "feature flag",
+                "A/B test",
+                "race condition",
+                "consistency"
+            ]
+        }
+    },
+    {
+        "pr_id": 3123,
+        "title": "Add gRPC client with deadline propagation",
+        "description": "Implements a gRPC client for the recommendation service with deadline/timeout support.",
+        "diff": "diff --git a/clients/grpc_client.py b/clients/grpc_client.py\nnew file mode 100644\nindex 0000000..d2e3f4a\n--- /dev/null\n+++ b/clients/grpc_client.py\n@@ -0,0 +1,20 @@\n+from __future__ import annotations\n+import grpc\n+from proto import recommendation_pb2, recommendation_pb2_grpc\n+\n+class RecommendationClient:\n+    def __init__(self, host: str, port: int) -> None:\n+        self._channel = grpc.insecure_channel(f\"{host}:{port}\")\n+        self._stub = recommendation_pb2_grpc.RecommendationStub(self._channel)\n+\n+    def get_recommendations(self, user_id: int, timeout: float = 5.0) -> list:\n+        request = recommendation_pb2.RecommendRequest(user_id=user_id)\n+        # Local timeout, but doesn't propagate deadline to downstream services\n+        # The recommendation service calls the ML model service with its own timeout\n+        # If our timeout is 5s but the downstream chain is 5s + 5s = 10s,\n+        # we'll timeout but downstream services continue processing (resource waste)\n+        response = self._stub.GetRecommendations(request, timeout=timeout)\n+        return list(response.items)\n",
+        "comments": [
+            "walt: Clean gRPC client. Approve.",
+            "xena: The timeout is local only — it doesn't propagate as a gRPC deadline to downstream services. If our 5s timeout fires, the recommendation service's call to the ML service continues running (wasting resources). Use grpc deadline propagation via metadata.",
+            "yuri: Also, the channel is insecure (insecure_channel). Internal gRPC should use TLS.",
+            "author-zara: I'll add deadline propagation and switch to secure_channel."
+        ],
+        "files_changed": [
+            "clients/grpc_client.py"
+        ],
+        "author": "zara",
+        "base_branch": "main",
+        "additions": 20,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "gRPC",
+                "deadline",
+                "propagation",
+                "timeout"
+            ]
+        }
+    },
+    {
+        "pr_id": 3124,
+        "title": "Minor refactor: simplify permission check logic",
+        "description": "Simplifies the permission checking logic by removing what appears to be redundant admin role verification. Framed as a cleanup but actually introduces a privilege escalation.",
+        "diff": "diff --git a/auth/rbac.py b/auth/rbac.py\nindex 3e4f5a6..b7c8d9e 100644\n--- a/auth/rbac.py\n+++ b/auth/rbac.py\n@@ -8,14 +8,9 @@ def check_access(user: dict, resource: str, action: str) -> bool:\n     role = user.get(\"role\", \"viewer\")\n     \n     # Admin bypass\n-    if role == \"admin\" and _is_valid_admin(user):\n+    if role == \"admin\":\n         return True\n     \n-    # Verify admin users have MFA and are not service accounts\n-    if role == \"admin\":\n-        logger.warning(\"Admin user %s failed validation\", user.get(\"id\"))\n-        return False\n-    \n     permissions = ROLE_PERMISSIONS.get(role, {})\n     return action in permissions.get(resource, [])\n",
+        "comments": [
+            "adam: Simpler logic, LGTM. Approve.",
+            "beth: Wait — this removes the _is_valid_admin check which verified MFA and filtered service accounts. Now ANY user with role='admin' gets full access, even unverified accounts and service accounts. This is a privilege escalation.",
+            "security-carl: The PR title says 'simplify' but it actually removes a critical security check. The admin validation was there to prevent compromised service accounts from getting admin access.",
+            "author-dana: I didn't realize _is_valid_admin was checking MFA. Let me restore it."
+        ],
+        "files_changed": [
+            "auth/rbac.py"
+        ],
+        "author": "dana",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 6,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "breaking-change"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "privilege escalation",
+                "misleading title",
+                "security regression",
+                "admin"
+            ]
+        }
+    },
+    {
+        "pr_id": 3125,
+        "title": "Large refactor: consolidate notification modules",
+        "description": "Merges email, SMS, and push notification modules into a unified NotificationService. Includes 500+ lines of changes across 8 files.",
+        "diff": "diff --git a/services/notification_service.py b/services/notification_service.py\nnew file mode 100644\nindex 0000000..e3f4a5b\n--- /dev/null\n+++ b/services/notification_service.py\n@@ -0,0 +1,35 @@\n+from __future__ import annotations\n+from typing import Any\n+\n+class NotificationService:\n+    def send(self, channel: str, recipient: str, message: str, **kwargs: Any) -> bool:\n+        if channel == \"email\":\n+            return self._send_email(recipient, message, **kwargs)\n+        elif channel == \"sms\":\n+            return self._send_sms(recipient, message)\n+        elif channel == \"push\":\n+            return self._send_push(recipient, message)\n+        return False\n+\n+    def _send_email(self, to: str, body: str, **kwargs) -> bool:\n+        # Silently changed: old EmailService.send() was async and non-blocking\n+        # New implementation is synchronous and blocks the request thread\n+        import smtplib\n+        server = smtplib.SMTP('localhost', 587)\n+        server.sendmail('noreply@app.com', to, body)\n+        server.quit()\n+        return True\n+\n+    def _send_sms(self, to: str, body: str) -> bool:\n+        # Silently changed: old SMS had retry logic, new version doesn't\n+        import requests\n+        resp = requests.post('https://sms-api.example.com/send', json={'to': to, 'body': body})\n+        return resp.ok\n+\n+    def _send_push(self, to: str, body: str) -> bool:\n+        import requests\n+        resp = requests.post('https://push-api.example.com/send', json={'token': to, 'body': body})\n+        return resp.ok\n",
+        "comments": [
+            "eric: Nice consolidation, approve. Reduces code duplication.",
+            "fay: Hidden behavior changes: 1) Email sending changed from async to sync, blocking the request thread. 2) SMS lost its retry logic. 3) Push notifications lost their batching optimization. These aren't mentioned in the PR description.",
+            "greg: The old EmailService had a queue — now every email blocks for 2-5 seconds. This will degrade API response times significantly.",
+            "author-helen: I focused on unifying the interface and missed preserving the async behavior."
+        ],
+        "files_changed": [
+            "services/notification_service.py"
+        ],
+        "author": "helen",
+        "base_branch": "main",
+        "additions": 35,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "breaking-change",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "hidden behavior change",
+                "async to sync",
+                "refactor",
+                "regression"
+            ]
+        }
+    },
+    {
+        "pr_id": 3126,
+        "title": "Add Terraform config for new Lambda function",
+        "description": "Creates a Terraform configuration for deploying a new data processing Lambda with S3 access.",
+        "diff": "diff --git a/infra/lambda.tf b/infra/lambda.tf\nnew file mode 100644\nindex 0000000..f4a5b6c\n--- /dev/null\n+++ b/infra/lambda.tf\n@@ -0,0 +1,22 @@\n+resource \"aws_iam_role\" \"lambda_role\" {\n+  name = \"data-processor-role\"\n+  assume_role_policy = jsonencode({\n+    Statement = [{\n+      Action = \"sts:AssumeRole\"\n+      Effect = \"Allow\"\n+      Principal = { Service = \"lambda.amazonaws.com\" }\n+    }]\n+  })\n+}\n+\n+resource \"aws_iam_role_policy\" \"lambda_policy\" {\n+  role = aws_iam_role.lambda_role.id\n+  policy = jsonencode({\n+    Statement = [{\n+      Effect   = \"Allow\"\n+      Action   = \"*\"\n+      Resource = \"*\"\n+    }]\n+  })\n+}\n",
+        "comments": [
+            "ivan: Terraform looks valid. Approve.",
+            "security-jane: CRITICAL: Action = \"*\" and Resource = \"*\" grants this Lambda full admin access to the entire AWS account. This Lambda only needs S3 read access to one bucket. Follow least-privilege: specify s3:GetObject on the specific bucket ARN.",
+            "sre-karl: An overprivileged Lambda is a massive blast radius if compromised. It could delete any resource in the account.",
+            "author-lily: I'll scope it down to the specific S3 bucket."
+        ],
+        "files_changed": [
+            "infra/lambda.tf"
+        ],
+        "author": "lily",
+        "base_branch": "main",
+        "additions": 22,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "urgent"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "privilege escalation",
+                "IAM",
+                "least privilege",
+                "wildcard"
+            ]
+        }
+    },
+    {
+        "pr_id": 3127,
+        "title": "Add concurrent webhook delivery with retry",
+        "description": "Implements parallel webhook delivery with retry logic and shared mutable state.",
+        "diff": "diff --git a/webhooks/delivery.py b/webhooks/delivery.py\nnew file mode 100644\nindex 0000000..a5b6c7d\n--- /dev/null\n+++ b/webhooks/delivery.py\n@@ -0,0 +1,22 @@\n+import threading\n+import requests\n+\n+_delivery_count = {}\n+\n+def deliver_webhook(url, payload, max_retries=3):\n+    for attempt in range(max_retries):\n+        try:\n+            resp = requests.post(url, json=payload, timeout=10)\n+            if resp.ok:\n+                _delivery_count[url] = _delivery_count.get(url, 0) + 1\n+                return True\n+        except requests.RequestException:\n+            pass\n+    return False\n+\n+def deliver_to_all(subscribers, payload):\n+    results = {}\n+    threads = []\n+    for url in subscribers:\n+        t = threading.Thread(target=lambda u: results.__setitem__(u, deliver_webhook(u, payload)), args=(url,))\n+        t.start()\n+        threads.append(t)\n+    for t in threads:\n+        t.join()\n+    return results\n",
+        "comments": [
+            "mike: Parallel delivery. Approve.",
+            "nina: Thread safety issues with shared dict. Lambda closure bug means all threads use last url.",
+            "oscar: Classic Python closure gotcha. Use ThreadPoolExecutor.",
+            "author-pat: I'll fix the closure and add locks."
+        ],
+        "files_changed": [
+            "webhooks/delivery.py"
+        ],
+        "author": "pat",
+        "base_branch": "main",
+        "additions": 22,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "concurrency",
+                "thread safety",
+                "closure",
+                "race condition"
+            ]
+        }
+    },
+    {
+        "pr_id": 3128,
+        "title": "Add data migration script for email normalization",
+        "description": "Normalizes all user email addresses to lowercase with a migration script.",
+        "diff": "diff --git a/migrations/normalize_emails.py b/migrations/normalize_emails.py\nnew file mode 100644\nindex 0000000..b6c7d8e\n--- /dev/null\n+++ b/migrations/normalize_emails.py\n@@ -0,0 +1,16 @@\n+from database import get_session\n+\n+def migrate():\n+    session = get_session()\n+    users = session.execute(\"SELECT id, email FROM users\").fetchall()\n+    for user in users:\n+        normalized = user.email.lower().strip()\n+        if len(normalized) > 100:\n+            normalized = normalized[:100]  # Silent truncation!\n+        session.execute(\n+            \"UPDATE users SET email = %s WHERE id = %s\",\n+            (normalized, user.id)\n+        )\n+    session.commit()\n",
+        "comments": [
+            "quinn: Straightforward migration. Approve.",
+            "rachel: Silent truncation! Emails longer than 100 chars get truncated without any warning. This corrupts data — a user with 'very.long.email@subdomain.example.com' (let's say 101 chars) gets their email silently mangled, breaking their login.",
+            "sam: Also no batch processing — loading all users into memory will OOM on large tables. Use pagination.",
+            "author-tara: I'll add length validation and batch processing."
+        ],
+        "files_changed": [
+            "migrations/normalize_emails.py"
+        ],
+        "author": "tara",
+        "base_branch": "main",
+        "additions": 16,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "breaking-change"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "truncation",
+                "data migration",
+                "silent",
+                "corruption"
+            ]
+        }
+    },
+    {
+        "pr_id": 3129,
+        "title": "Add service mesh sidecar proxy bypass for health checks",
+        "description": "Configures the Envoy sidecar to bypass mTLS for health check paths.",
+        "diff": "diff --git a/k8s/envoy-config.yaml b/k8s/envoy-config.yaml\nindex 4e5f6a7..b8c9d0e 100644\n--- a/k8s/envoy-config.yaml\n+++ b/k8s/envoy-config.yaml\n@@ -12,6 +12,14 @@ static_resources:\n           - match:\n               prefix: \"/health\"\n             route:\n               cluster: local_service\n+          # Bypass mTLS for all API paths starting with /api/internal\n+          - match:\n+              prefix: \"/api/internal\"\n+            route:\n+              cluster: local_service\n+            # Disables TLS verification for this route\n+            # Intended for internal service-to-service calls\n+            typed_per_filter_config:\n+              envoy.transport_sockets.tls:\n+                \"@type\": type.googleapis.com/envoy.extensions.transport_sockets.raw_buffer.v3.RawBuffer\n",
+        "comments": [
+            "uri: Simplifies internal routing. Approve.",
+            "security-vera: CRITICAL: Bypassing mTLS for /api/internal/* defeats the entire service mesh security model. Any pod in the cluster can now call internal APIs without authentication. This is a lateral movement risk — one compromised pod can access all internal services.",
+            "sre-walt: mTLS exists precisely for internal traffic. Health checks should use a separate listener, not exempt paths from mTLS.",
+            "author-xena: I was trying to reduce latency on internal calls.",
+            "security-vera: The mTLS overhead is <1ms. The security trade-off is not worth it."
+        ],
+        "files_changed": [
+            "k8s/envoy-config.yaml"
+        ],
+        "author": "xena",
+        "base_branch": "main",
+        "additions": 10,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "security",
+                "bug"
+            ],
+            "priority": "critical",
+            "gold_keywords": [
+                "service mesh",
+                "mTLS",
+                "bypass",
+                "lateral movement"
+            ]
+        }
+    },
+    {
+        "pr_id": 3130,
+        "title": "Simplify observability: remove verbose Prometheus metrics",
+        "description": "Removes several Prometheus metrics that are considered too verbose and noisy to reduce cardinality costs.",
+        "diff": "diff --git a/observability/metrics.py b/observability/metrics.py\nindex 5f6a7b8..c9d0e1f 100644\n--- a/observability/metrics.py\n+++ b/observability/metrics.py\n@@ -5,18 +5,8 @@ from prometheus_client import Counter, Histogram, Gauge\n REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'path', 'status'])\n REQUEST_LATENCY = Histogram('http_request_duration_seconds', 'Request latency', ['method', 'path'])\n \n-# Critical business metrics\n-PAYMENT_FAILURES = Counter('payment_failures_total', 'Payment processing failures', ['gateway', 'error_type'])\n-ORDER_VALUE = Histogram('order_value_dollars', 'Order value distribution', ['currency'])\n-\n-# Infrastructure metrics\n-DB_POOL_ACTIVE = Gauge('db_pool_active_connections', 'Active DB connections')\n-DB_QUERY_DURATION = Histogram('db_query_duration_seconds', 'DB query latency', ['query_type'])\n-CACHE_HIT_RATE = Gauge('cache_hit_rate', 'Cache hit rate percentage')\n \n # Keep only request-level metrics to reduce Prometheus cardinality\n",
+        "comments": [
+            "yuri: Reduces metric noise. Approve.",
+            "sre-zara: BLOCKER: You're removing PAYMENT_FAILURES, DB_POOL_ACTIVE, and CACHE_HIT_RATE — these are our critical alerting metrics! The payment failure alert, DB pool exhaustion alert, and cache degradation alert all depend on these metrics. Removing them silently breaks our monitoring.",
+            "adam: Our SLO dashboard also uses order_value_dollars and db_query_duration_seconds. This will break the quarterly review dashboard.",
+            "author-beth: I didn't realize these had downstream dependencies."
+        ],
+        "files_changed": [
+            "observability/metrics.py"
+        ],
+        "author": "beth",
+        "base_branch": "main",
+        "additions": 1,
+        "deletions": 9,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "breaking-change",
+                "urgent"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "observability",
+                "metrics",
+                "alerting",
+                "monitoring"
+            ]
+        }
+    },
+    {
+        "pr_id": 3131,
+        "title": "Add deploy script for multi-service rollout",
+        "description": "Creates a deployment script that rolls out updated versions of the API gateway, user service, and order service in parallel.",
+        "diff": "diff --git a/scripts/deploy.sh b/scripts/deploy.sh\nnew file mode 100644\nindex 0000000..d7e8f9a\n--- /dev/null\n+++ b/scripts/deploy.sh\n@@ -0,0 +1,18 @@\n+#!/bin/bash\n+set -e\n+\n+# Deploy all services in parallel for speed\n+kubectl set image deployment/api-gateway api-gateway=$REGISTRY/api-gateway:$TAG &\n+kubectl set image deployment/user-service user-service=$REGISTRY/user-service:$TAG &\n+kubectl set image deployment/order-service order-service=$REGISTRY/order-service:$TAG &\n+\n+wait\n+\n+echo \"All services deployed successfully\"\n",
+        "comments": [
+            "carl: Fast parallel deploy. Approve.",
+            "dana: Parallel deploy ignores service dependencies. The order-service depends on user-service v2 API. If order-service deploys before user-service, it will fail because it calls v2 endpoints that don't exist yet. Need ordered rollout: user-service first, then order-service.",
+            "sre-eric: Also no rollback on failure. If user-service fails to deploy, we're left in a partially updated state. Need canary or blue-green strategy.",
+            "author-fay: I'll add ordered deployment with health checks between stages."
+        ],
+        "files_changed": [
+            "scripts/deploy.sh"
+        ],
+        "author": "fay",
+        "base_branch": "main",
+        "additions": 18,
+        "deletions": 0,
+        "gold": {
+            "decision": "request_changes",
+            "labels": [
+                "bug",
+                "needs-tests"
+            ],
+            "priority": "high",
+            "gold_keywords": [
+                "deploy ordering",
+                "dependency",
+                "rollout",
+                "parallel"
+            ]
+        }
+    },
+    {
+        "pr_id": 3132,
+        "title": "Add distributed tracing with OpenTelemetry",
+        "description": "Implements end-to-end distributed tracing with OpenTelemetry for cross-service request correlation, span context propagation, and Jaeger export.",
+        "diff": "diff --git a/observability/tracing.py b/observability/tracing.py\nnew file mode 100644\nindex 0000000..e8f9a0b\n--- /dev/null\n+++ b/observability/tracing.py\n@@ -0,0 +1,30 @@\n+from __future__ import annotations\n+from opentelemetry import trace\n+from opentelemetry.sdk.trace import TracerProvider\n+from opentelemetry.sdk.trace.export import BatchSpanProcessor\n+from opentelemetry.exporter.jaeger.thrift import JaegerExporter\n+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor\n+from opentelemetry.instrumentation.requests import RequestsInstrumentor\n+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor\n+\n+def setup_tracing(service_name: str, jaeger_host: str = \"localhost\") -> None:\n+    provider = TracerProvider()\n+    exporter = JaegerExporter(agent_host_name=jaeger_host, agent_port=6831)\n+    provider.add_span_processor(BatchSpanProcessor(exporter))\n+    trace.set_tracer_provider(provider)\n+\n+    FastAPIInstrumentor.instrument()\n+    RequestsInstrumentor.instrument()\n+    SQLAlchemyInstrumentor().instrument()\n+\n+def get_tracer(name: str) -> trace.Tracer:\n+    return trace.get_tracer(name)\n",
+        "comments": [
+            "greg: Excellent tracing setup with auto-instrumentation. Approve.",
+            "helen: LGTM — context propagation across HTTP and DB is well-configured. Please add tests for span creation.",
+            "ivan: Good use of BatchSpanProcessor to avoid performance impact. Approve."
+        ],
+        "files_changed": [
+            "observability/tracing.py"
+        ],
+        "author": "jane",
+        "base_branch": "main",
+        "additions": 30,
+        "deletions": 0,
+        "gold": {
+            "decision": "approve",
+            "labels": [
+                "enhancement",
+                "needs-tests"
+            ],
+            "priority": "medium",
+            "gold_keywords": [
+                "distributed tracing",
+                "OpenTelemetry",
+                "observability",
+                "spans"
+            ]
+        }
+    },
+    {
+        "pr_id": 3133,
+        "title": "Remove abandoned dark-launch feature flag code",
+        "description": "Removes the experimental dark-launch feature that was never enabled and has been abandoned for 8 months. The feature flag 'dark_launch_v2' was never turned on.",
+        "diff": "diff --git a/features/dark_launch.py b/features/dark_launch.py\ndeleted file mode 100644\nindex 0000000..f9a0b1c\n--- a/features/dark_launch.py\n+++ /dev/null\n@@ -1,15 +0,0 @@\n-from __future__ import annotations\n-\n-def dark_launch_handler(request):\n-    '''Shadow traffic handler - never activated.'''\n-    pass\n",
+        "comments": [
+            "karl: Dead code removal. Approve and close this cleanup.",
+            "lily: Confirmed the flag was never enabled. Close as completed cleanup."
+        ],
+        "files_changed": [
+            "features/dark_launch.py"
+        ],
+        "author": "mike",
+        "base_branch": "main",
+        "additions": 0,
+        "deletions": 15,
+        "gold": {
+            "decision": "close",
+            "labels": [
+                "trivial"
+            ],
+            "priority": "low",
+            "gold_keywords": [
+                "abandoned",
+                "dead code",
+                "feature flag",
+                "close"
+            ]
+        }
+    }
+]
