@@ -112,7 +112,7 @@ Linear decay from **2e-5 → 0** over 2 epochs with gradient norms oscillating i
 | Test Suite | **398 cases, all green** |
 | Resolution Speed | **~3–8 seconds** per PR |
 
-Our test suite covers **398 cases** across reward logic, environment behavior, schema validation, and training utilities — all green. Every score is reproducible. Spin up the [live HF Space](https://huggingface.co/spaces/hitanshjain1812/meta_final/main), run the environment yourself, and verify any claim we make here.
+Our test suite covers **398 cases** across reward logic, environment behavior, schema validation, and training utilities — all green. Every score is reproducible. Spin up the [live HF Space](https://huggingface.co/spaces/hitanshjain1812/meta_final/tree/main), run the environment yourself, and verify any claim we make here.
 
 The average engineering team merges **50–200 PRs per week.** If this agent resolves even 40% of them autonomously, that's **20–80 hours of engineering time back per week.**
 
