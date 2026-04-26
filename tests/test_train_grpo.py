@@ -20,6 +20,7 @@ from train_grpo import (
     safe_json_loads,
     bootstrap_action,
     clamp_reward,
+    compute_aux_loss,
     heuristic_action_from_text,
     evaluate_model,
 )
@@ -291,3 +292,14 @@ class TestLatencyAwareEvaluation:
         assert {"raw_reward", "latency_seconds", "latency_budget_seconds", "latency_discount", "latency_adjusted_score"}.issubset(
             rows[0].keys()
         )
+
+
+class TestAuxLossMetric:
+    def test_aux_loss_is_positive_for_reasonable_inputs(self):
+        value = compute_aux_loss(mean_reward=0.4, reward_std=0.1, parse_success_rate=0.6, structured_completion_rate=0.7)
+        assert value > 0.0
+
+    def test_aux_loss_improves_with_better_signal(self):
+        worse = compute_aux_loss(mean_reward=0.2, reward_std=0.2, parse_success_rate=0.3, structured_completion_rate=0.4)
+        better = compute_aux_loss(mean_reward=0.7, reward_std=0.05, parse_success_rate=0.85, structured_completion_rate=0.9)
+        assert better < worse
