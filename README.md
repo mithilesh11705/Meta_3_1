@@ -25,7 +25,7 @@ This environment frames PR triage as a **verifiable RL problem** where every dim
 
 ## Architecture
 
-![PR Review Environment Architecture](assets/architecture.png)
+![PR Review Environment Architecture](https://raw.githubusercontent.com/HitanshGithub/meta_hack/main/assets/architecture.png)
 
 `PRReviewEnv` inherits from `openenv.core.env_server.interfaces.Environment` — the official OpenEnv base class — and implements the standard Gymnasium-style API:
 
