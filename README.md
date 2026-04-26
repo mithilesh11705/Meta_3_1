@@ -8,7 +8,7 @@ This project turns code review from a vague chat task into a **measurable decisi
 
 - **Training Notebook:** [GRPO_training.ipynb](https://www.kaggle.com/code/hitansh18/grpo-training)
 - **Project Blog:** [Blog.md](./Blog.md)
-- **Hugging Face Space:** [hitanshjain1812/meta_final](https://huggingface.co/spaces/hitanshjain1812/meta_final/main)
+- **Hugging Face Space:** [hitanshjain1812/meta_final](https://huggingface.co/spaces/hitanshjain1812/meta_final/tree/main)
 
 ## 1) Problem Statement
 
