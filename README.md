@@ -153,15 +153,27 @@ Then inspect:
 - `artifacts/grpo_judge_run/plots/reward_curve.png`
 - `artifacts/grpo_judge_run/logs/before_after.md`
 
+## Project Documentation (Finale Ready)
+
+We have prepared comprehensive documentation and presentation materials for the hackathon finale:
+
+- 📖 **[Professional Blog Post](blog.md)**: A deep dive into the "Agentic Triage Protocol" and how we trained our models using GRPO.
+- 🎤 **[Presentation Script](PRESENTATION_SCRIPT.md)**: A high-impact 2-minute elevator pitch for the judges.
+- 🛝 **[Slide Deck Content](SLIDE_DECK_CONTENT.md)**: A structured outline for a professional 7-slide presentation.
+- 🏗️ **[Architecture Docs](ARCHITECTURE.md)**: Detailed system design and data flow.
+- ⚖️ **[Scoring Analysis](SCORING_ANALYSIS.md)**: Rationale behind the multi-axis reward engine and consistency penalties.
+
 ## Required Submission Links
 Add these in your final Hackathon submission:
-- Hugging Face Space URL: `TODO`
-- Mini-blog URL (HF article) or `<2 min` YouTube URL: `TODO`
-- Optional slide deck URL: `TODO`
+- **Hugging Face Space URL**: `[DEPLOYED_URL_HERE]`
+- **Mini-blog URL (blog.md)**: `[HF_BLOG_URL_HERE]`
+- **Presentation Deck**: `[PRESENTATION_LINK_HERE]`
+- **Demo Video (<2 min)**: `[YOUTUBE_URL_HERE]`
 
-## Additional Docs
-- [JUDGES_GUIDE.md](JUDGES_GUIDE.md)
-- [VALIDATION_CHECKLIST.md](VALIDATION_CHECKLIST.md)
-- [SUBMISSION_READY.md](SUBMISSION_READY.md)
-- [ARCHITECTURE.md](ARCHITECTURE.md)
-- [SCORING_ANALYSIS.md](SCORING_ANALYSIS.md)
+## Additional Resources
+- [JUDGES_GUIDE.md](JUDGES_GUIDE.md): Evaluator runbook and reproduction steps.
+- [VALIDATION_CHECKLIST.md](VALIDATION_CHECKLIST.md): Final system sanity checks.
+- [SUBMISSION_READY.md](SUBMISSION_READY.md): Submission readiness tracker.
+
+---
+*Built with ❤️ by Meta Infra Tooling for the OpenEnv Hackathon.*
