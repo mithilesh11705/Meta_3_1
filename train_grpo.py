@@ -569,6 +569,44 @@ def save_reward_curve(reward_rows: list[dict[str, Any]], output_dir: Path) -> No
     plt.close()
 
 
+def save_trainer_metric_curves(log_history: list[dict[str, Any]], output_dir: Path) -> None:
+    if not log_history:
+        return
+
+    plot_specs = [
+        ("rewards/env_reward_fn/mean", "trainer_env_reward_curve.png", "Env Reward Mean"),
+        ("learning_rate", "trainer_learning_rate_curve.png", "Learning Rate"),
+        ("grad_norm", "trainer_grad_norm_curve.png", "Gradient Norm"),
+    ]
+    plot_dir = output_dir / "plots"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+
+    for metric_key, filename, title in plot_specs:
+        points: list[tuple[float, float]] = []
+        for idx, row in enumerate(log_history):
+            value = row.get(metric_key)
+            if not isinstance(value, (int, float)):
+                continue
+            x_val = row.get("epoch")
+            if not isinstance(x_val, (int, float)):
+                x_val = idx + 1
+            points.append((float(x_val), float(value)))
+        if not points:
+            continue
+
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        plt.figure(figsize=(8, 4.8))
+        plt.plot(xs, ys, color="#1f77b4", linewidth=2.0, marker="o", markersize=3)
+        plt.title(f"GRPO {title}")
+        plt.xlabel("Epoch")
+        plt.ylabel(title)
+        plt.grid(alpha=0.25)
+        plt.tight_layout()
+        plt.savefig(plot_dir / filename, dpi=140)
+        plt.close()
+
+
 def write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -875,6 +913,7 @@ def main() -> int:
         component_fields = sorted({key for row in reward_components for key in row.keys()})
         write_csv(output_dir / "logs" / "reward_components.csv", reward_components, component_fields)
     save_reward_curve(reward_rows, output_dir)
+    save_trainer_metric_curves(trainer.state.log_history, output_dir)
 
     summary = {
         "baseline": baseline,
