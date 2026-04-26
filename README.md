@@ -6,10 +6,9 @@ This project turns code review from a vague chat task into a **measurable decisi
 
 ## Quick Links
 
-- **Training Notebook:** [GRPO_training.ipynb](./Training%20Script/GRPO_training.ipynb)
+- **Training Notebook:** [GRPO_training.ipynb](https://www.kaggle.com/code/hitansh18/grpo-training)
 - **Project Blog:** [Blog.md](./Blog.md)
-- **Hugging Face Space:** [hitanshjain1812/meta_final](https://huggingface.co/spaces/hitanshjain1812/meta_final)
-- **Space Endpoint (used in training script defaults):** [hitanshjain1812-mete-final.hf.space](https://hitanshjain1812-mete-final.hf.space)
+- **Hugging Face Space:** [hitanshjain1812/meta_final](https://huggingface.co/spaces/hitanshjain1812/meta_final/main)
 
 ## 1) Problem Statement
 
