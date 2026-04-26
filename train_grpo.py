@@ -17,7 +17,7 @@ import torch
 from datasets import Dataset
 from peft import LoraConfig, get_peft_model
 from pr_review_env.reward import compute_latency_adjusted_score, compute_latency_discount
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 from trl import GRPOConfig, GRPOTrainer
 
 
@@ -577,6 +577,19 @@ def write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> 
         writer.writerows(rows)
 
 
+class HideTrainMetricsCallback(TrainerCallback):
+    """Suppress selected noisy keys from trainer console logs."""
+
+    def __init__(self, keys_to_hide: set[str]) -> None:
+        self.keys_to_hide = set(keys_to_hide)
+
+    def on_log(self, args: Any, state: Any, control: Any, logs: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        if not logs:
+            return
+        for key in self.keys_to_hide:
+            logs.pop(key, None)
+
+
 def build_grpo_config(args: argparse.Namespace, output_dir: Path) -> GRPOConfig:
     config_kwargs: dict[str, Any] = {
         "output_dir": str(output_dir / "checkpoints"),
@@ -678,6 +691,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-strict-json-reward", dest="strict_json_reward", action="store_false")
     parser.add_argument("--strict-json-warmup-steps", type=int, default=0)
     parser.add_argument("--parse-failure-reward", type=float, default=0.01)
+    parser.add_argument(
+        "--suppress-train-log-keys",
+        type=str,
+        default="loss,completions/clipped_ratio,completions/mean_terminated_length",
+        help="Comma-separated trainer log keys to hide from console output.",
+    )
     parser.add_argument("--use-unsloth", action="store_true")
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=16)
@@ -783,6 +802,9 @@ def main() -> int:
 
     print("[INFO] Starting GRPO training")
     trainer = GRPOTrainer(**trainer_kwargs)
+    suppressed = {part.strip() for part in args.suppress_train_log_keys.split(",") if part.strip()}
+    if suppressed:
+        trainer.add_callback(HideTrainMetricsCallback(suppressed))
     trainer.train()
 
     total_parse_attempts = parse_success_count + parse_fallback_count

@@ -48,6 +48,7 @@ python -u train_grpo.py \
   --parse-failure-reward "${TRAIN_PARSE_FAILURE_REWARD:-0.001}" \
   --max-completion-length "${TRAIN_MAX_COMPLETION_LENGTH:-96}" \
   --max-new-tokens "${TRAIN_MAX_NEW_TOKENS:-96}" \
+  --suppress-train-log-keys "${TRAIN_SUPPRESS_LOG_KEYS:-loss,completions/clipped_ratio,completions/mean_terminated_length}" \
   --output-dir "${OUTPUT_DIR}" \
   ${EXTRA_ARGS} 2>&1 | tee "${OUTPUT_DIR}/training.log"
 
