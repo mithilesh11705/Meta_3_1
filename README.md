@@ -1,182 +1,231 @@
+# PR Review Environment
+
+A reinforcement learning environment for training language models to perform automated pull request code review triage. Built on the [OpenEnv](https://github.com/meta-pytorch/OpenEnv) framework.
+
+**Live Environment:** [hitanshjain1812/meta_final on Hugging Face Spaces](https://huggingface.co/spaces/hitanshjain1812/meta_final)
+
+**GitHub:** [mithilesh11705/Meta_3_1](https://github.com/mithilesh11705/Meta_3_1)
+
 ---
-title: PR Review Environment
-emoji: 🏆
-colorFrom: green
-colorTo: indigo
-sdk: docker
-app_file: server/app.py
-pinned: false
+
+## Problem
+
+Code review is one of the biggest bottlenecks in modern software engineering. Senior engineers spend 6-10 hours per week reviewing pull requests, yet studies show that 60% of review comments are about surface-level issues — wrong labels, missing priority flags, or boilerplate summaries that don't cite the actual code.
+
+Current LLM-based review tools generate generic feedback without structured decision-making. They can't reliably:
+
+- Classify the **type** of change (bug, security, enhancement, breaking-change)
+- Assign an appropriate **priority** level
+- Make a **triage decision** (approve, request changes, close)
+- Write an **evidence-grounded summary** that cites the diff
+
+This environment frames PR triage as a **verifiable RL problem** where every dimension of a review is scored against a deterministic gold standard, enabling GRPO training with dense, multi-component rewards.
+
 ---
 
-# pr-review-env
+## Architecture
 
-Deterministic OpenEnv environment for pull request triage and review quality assessment with **100 real-world PR scenarios** across three difficulty levels.
+![PR Review Environment Architecture](assets/architecture.png)
 
-## Theme Fit
-Primary fit: **Theme #3.1 - World Modeling (Professional Tasks)**.
+`PRReviewEnv` inherits from `openenv.core.env_server.interfaces.Environment` — the official OpenEnv base class — and implements the standard Gymnasium-style API:
 
-Why:
-- Professional workflow simulation (realistic PR review and risk triage).
-- Verifiable outcomes via environment-based reward.
-- Multi-step interaction through staged review (`identify_risk`, `assess_impact`, `final_triage`).
+```python
+from openenv.core.env_server.interfaces import Environment
 
-## What This Environment Trains
-- Decision quality: `approve` vs `request_changes` vs `close`
-- Risk labeling: security, bug, urgency, and test coverage cues
-- Priority judgment: low/medium/high/critical
-- Evidence-grounded communication in review summaries
+class PRReviewEnv(Environment):
+    def reset(self, seed=None, episode_id=None, **kwargs) -> Observation
+    def step(self, action, timeout_s=None, **kwargs) -> Observation
+    @property
+    def state(self) -> State
+```
 
-## Observation Space
-`pr_id`, `title`, `description`, `diff`, `comments`, `files_changed`, `author`, `base_branch`, `additions`, `deletions`, `current_step`, `max_steps`, `task_name`, `review_stage`, `stage_prompt`
+### Key Components
 
-## Action Space
-- `decision`: `approve | request_changes | close`
-- `labels`: list from `bug, security, enhancement, documentation, breaking-change, needs-tests, trivial, urgent`
-- `priority`: `low | medium | high | critical`
-- `review_summary`: free-form text, constrained by validator
+| Component | Description |
+|---|---|
+| **PRReviewEnv** | Core environment inheriting from OpenEnv `Environment` ABC |
+| **100 PR Scenarios** | 30 easy, 35 medium, 35 hard — covering typo fixes to distributed deadlocks |
+| **Multi-Stage Review** | 3-stage pipeline: Identify Risk, Assess Impact, Final Triage |
+| **Reward Engine** | 4-component composite score: Decision + Label F1 + Priority + Summary |
+| **FastAPI Server** | HTTP endpoints (`/reset`, `/step`, `/state`, `/health`) on port 7860 |
 
-## Reward Design
-Stage-aware weighted score:
-- Decision correctness
-- Label F1
-- Priority distance
-- Summary quality + evidence cues
-- Consistency penalties (anti-gaming)
-- Step penalty (`0.02 * (current_step - 1)`)
+---
 
-Total is clamped to strict `(0, 1)`.
+## How the Environment Works
 
-### Latency-Accuracy Tradeoff Scoring
-To better reflect CI/CD deployability, we now compute a latency-aware benchmark score:
+### Observation Space
 
-- `latency_adjusted_score = raw_reward * latency_discount`
-- `raw_reward` is the existing deterministic environment score
-- `latency_discount` is:
-  - `1.0` when latency is at or below task budget
-  - exponential decay above budget: `exp(-0.35 * max(0, latency_seconds - budget_seconds))`
-  - floored at `0.1` so slow-but-correct agents are penalized but not zeroed
+Each episode presents the agent with a PR containing:
 
-This keeps reward semantics deterministic while adding runtime-aware benchmarking in inference/evaluation pipelines.
-Use both `raw_reward` and `latency_adjusted_score` for analysis to plot an accuracy-speed Pareto frontier.
+```
+pr_id, title, description, diff, comments, files_changed,
+author, base_branch, additions, deletions,
+current_step, max_steps, review_stage, stage_prompt
+```
 
-## Tasks
+### Action Space
 
-**100 tasks** across 3 difficulty levels:
+The agent must return a structured JSON decision:
 
-| Difficulty | Count | Max Steps | Latency Budget (s) | Example Scenarios |
-|---|---:|---:|---:|---|
-| Easy | 30 | 4 | 5.0 | Typo fixes, import ordering, dead code removal, dependency pinning |
-| Medium | 35 | 6 | 8.0 | SQL injection, hardcoded credentials, cache invalidation, breaking API changes |
-| Hard | 35 | 8 | 10.0 | TOCTOU races, distributed locks, saga patterns, connection pool exhaustion |
+```json
+{
+  "decision": "approve | request_changes | close",
+  "labels": ["bug", "security", "enhancement", ...],
+  "priority": "low | medium | high | critical",
+  "review_summary": "Evidence-grounded summary citing the diff..."
+}
+```
 
-Backward-compatible task IDs: `easy`, `medium`, `hard` (first fixture per difficulty).
-All 100 tasks are accessible via `GET /tasks` or by ID (e.g. `easy_1012`, `medium_2081`).
+### Reward Function
+
+The reward is a composite score in (0, 1) computed from four independently verifiable components:
+
+| Component | Weight | How It's Scored |
+|---|---|---|
+| **Decision** | Exact match against gold standard | 1.0 if correct, scaled otherwise |
+| **Label F1** | Set-level F1 score across 8 valid labels | Precision + Recall based |
+| **Priority** | Distance on ordinal scale (low < medium < high < critical) | 1.0 - normalized distance |
+| **Summary** | Keyword overlap with gold evidence terms | Coverage of key terms |
+
+A step penalty of -0.02 per extra step encourages efficient triage.
+
+### Task Difficulties
+
+| Difficulty | Count | Examples | Max Steps |
+|---|---|---|---|
+| **Easy** | 30 | Typo fixes, dead code removal, import ordering | 4 |
+| **Medium** | 35 | Auth refactors, SQL injection, missing validation | 6 |
+| **Hard** | 35 | TOCTOU races, cache stampede, distributed deadlocks | 8 |
+
+---
+
+## Training Pipeline
+
+The environment is paired with a GRPO (Group Relative Policy Optimization) training pipeline that fine-tunes `Qwen/Qwen2.5-0.5B-Instruct` using LoRA:
+
+```
+Agent generates N completions per prompt
+    -> Each completion is sent to the environment via HTTP POST /step
+    -> Environment returns (observation, reward, done)
+    -> GRPO computes group-relative advantages: A = (r - mean) / std
+    -> Policy is updated to favor high-reward completions
+```
+
+### Training Results
+
+Training was run on Kaggle (Tesla T4) with the following configuration:
+
+| Parameter | Value |
+|---|---|
+| Base Model | Qwen/Qwen2.5-0.5B-Instruct |
+| Fine-tuning | LoRA (rank=16, alpha=32) |
+| Optimizer | AdamW (lr=2e-5, cosine schedule) |
+| Batch Size | 4 prompts x 4 completions |
+| Training Steps | 60 |
+| Framework | TRL GRPOTrainer |
+
+---
 
 ## Quick Start
+
+### 1. Install Dependencies
+
 ```bash
-docker build -t pr-review-env .
-docker run --rm -p 7860:7860 pr-review-env
-curl http://localhost:7860/health
+pip install -r requirements.txt
 ```
 
-## Baseline Inference
+### 2. Start the Environment Server
+
 ```bash
-set HF_TOKEN=hf_xxx
-python inference.py
+uvicorn server.app:app --host 0.0.0.0 --port 7860
 ```
 
-Optional environment variables:
-- `ENV_BASE_URL` (default: `http://127.0.0.1:7860`)
-- `API_BASE_URL` (default: `https://router.huggingface.co/v1`)
-- `MODEL_NAME` (default: `Qwen/Qwen2.5-72B-Instruct`)
+### 3. Interact with the Environment
 
-## RL Training (TRL + Unsloth, Colab-First)
+```python
+import requests
 
-This repo now includes a minimal GRPO training pipeline that talks directly to the environment verifier and writes judge-friendly artifacts.
+BASE = "http://localhost:7860"
 
-### Colab Notebook (Recommended)
-- [`colab/PR_Review_GRPO_Training.ipynb`](colab/PR_Review_GRPO_Training.ipynb)
+# Reset to an easy task
+obs = requests.post(f"{BASE}/reset", json={"task": "easy"}).json()
+print(obs["title"], obs["review_stage"])
 
-### Local Script
-```bash
-pip install -r requirements-train.txt
-python -m uvicorn server.app:app --host 0.0.0.0 --port 7860
+# Submit a review action
+action = {
+    "decision": "request_changes",
+    "labels": ["bug"],
+    "priority": "high",
+    "review_summary": "The diff introduces a race condition in the auth handler."
+}
+result = requests.post(f"{BASE}/step", json=action).json()
+print(f"Reward: {result['reward']:.3f}, Done: {result['done']}")
 ```
 
-In a second terminal:
+### 4. Run GRPO Training
+
 ```bash
-python train_grpo.py ^
-  --env-base-url http://127.0.0.1:7860 ^
-  --model-name Qwen/Qwen2.5-0.5B-Instruct ^
-  --num-samples 48 ^
-  --num-train-epochs 1 ^
-  --num-generations 4 ^
-  --loss-type dr_grpo ^
-  --beta 0.04 ^
-  --num-iterations 2 ^
-  --output-dir artifacts/grpo_run
+python train_grpo.py --env-base-url http://localhost:7860
 ```
-
-Training outputs:
-- `artifacts/grpo_run/logs/reward_history.csv`
-- `artifacts/grpo_run/logs/loss_history.csv` (new)
-- `artifacts/grpo_run/logs/reward_components.csv` (if available)
-- `artifacts/grpo_run/logs/evaluation_baseline.csv` (raw + latency metrics)
-- `artifacts/grpo_run/logs/evaluation_after_training.csv` (raw + latency metrics)
-- `artifacts/grpo_run/logs/training_summary.json`
-- `artifacts/grpo_run/logs/before_after.md`
-- `artifacts/grpo_run/plots/reward_curve.png`
-- `artifacts/grpo_run/plots/loss_curve.png` (new)
-- `artifacts/grpo_run/checkpoints/final/`
-
-## Hugging Face Space Deployment
-```bash
-git remote add space https://huggingface.co/spaces/<username>/pr-review-env
-git push space main
-```
-
-The Docker image launches with:
-`uvicorn server.app:app --host 0.0.0.0 --port 7860`
-
-## Judge Reproduction Flow
-```bash
-git clone <repo-url>
-cd pr-review-env
-docker build -t pr-review-env .
-docker run --rm -p 7860:7860 pr-review-env
-```
-
-In a second terminal:
-```bash
-python inference.py
-python train_grpo.py --env-base-url http://127.0.0.1:7860 --model-name Qwen/Qwen2.5-0.5B-Instruct --num-generations 2 --num-train-epochs 1 --output-dir artifacts/grpo_judge_run
-```
-
-Then inspect:
-- `artifacts/grpo_judge_run/plots/reward_curve.png`
-- `artifacts/grpo_judge_run/logs/before_after.md`
-
-## Project Documentation (Finale Ready)
-
-We have prepared comprehensive documentation and presentation materials for the hackathon finale:
-
-- 📖 **[Professional Blog Post](blog.md)**: A deep dive into the "Agentic Triage Protocol" and how we trained our models using GRPO.
-- 🎤 **[Presentation Script](PRESENTATION_SCRIPT.md)**: A high-impact 2-minute elevator pitch for the judges.
-- 🛝 **[Slide Deck Content](SLIDE_DECK_CONTENT.md)**: A structured outline for a professional 7-slide presentation.
-- 🏗️ **[Architecture Docs](ARCHITECTURE.md)**: Detailed system design and data flow.
-- ⚖️ **[Scoring Analysis](SCORING_ANALYSIS.md)**: Rationale behind the multi-axis reward engine and consistency penalties.
-
-## Required Submission Links
-Add these in your final Hackathon submission:
-- **Hugging Face Space URL**: `[DEPLOYED_URL_HERE]`
-- **Mini-blog URL (blog.md)**: `[HF_BLOG_URL_HERE]`
-- **Presentation Deck**: `[PRESENTATION_LINK_HERE]`
-- **Demo Video (<2 min)**: `[YOUTUBE_URL_HERE]`
-
-## Additional Resources
-- [JUDGES_GUIDE.md](JUDGES_GUIDE.md): Evaluator runbook and reproduction steps.
-- [VALIDATION_CHECKLIST.md](VALIDATION_CHECKLIST.md): Final system sanity checks.
-- [SUBMISSION_READY.md](SUBMISSION_READY.md): Submission readiness tracker.
 
 ---
-*Built with ❤️ by Meta Infra Tooling for the OpenEnv Hackathon.*
+
+## Deployment
+
+### Docker (Hugging Face Spaces)
+
+```bash
+docker build -t pr-review-env .
+docker run -p 7860:7860 pr-review-env
+```
+
+The Dockerfile is pre-configured for Hugging Face Spaces deployment.
+
+---
+
+## Project Structure
+
+```
+Meta_3_1/
+├── pr_review_env/          # Core environment package
+│   ├── env.py              # PRReviewEnv(Environment) — OpenEnv base class
+│   ├── models.py           # Action, Observation, Reward, StepResult schemas
+│   ├── reward.py           # 4-component composite reward engine
+│   └── tasks/              # 100 PR scenarios (easy/, medium/, hard/)
+├── server/
+│   └── app.py              # FastAPI HTTP server
+├── train_grpo.py           # GRPO training script (TRL + LoRA)
+├── inference.py            # Single-PR inference script
+├── openenv.yaml            # OpenEnv environment manifest
+├── Dockerfile              # HF Spaces deployment
+├── demo/
+│   └── PR_Review_GRPO_Kaggle.ipynb  # Kaggle training notebook
+└── requirements.txt
+```
+
+---
+
+## OpenEnv Integration
+
+This environment is built on top of **OpenEnv** (`openenv-core >= 0.2.3`):
+
+- `PRReviewEnv` inherits from `openenv.core.env_server.interfaces.Environment`
+- Implements the abstract `reset()`, `step()`, and `state` contract
+- Uses OpenEnv canonical types: `Action`, `Observation`, `State`
+- Ships with `openenv.yaml` manifest for environment discovery
+- Deployed as a Docker-based Hugging Face Space
+
+---
+
+## References
+
+- [OpenEnv Framework](https://github.com/meta-pytorch/OpenEnv)
+- [TRL Library (GRPO)](https://huggingface.co/docs/trl)
+- [Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)
+- [LoRA: Low-Rank Adaptation](https://arxiv.org/abs/2106.09685)
+
+---
+
+## License
+
+This project is released under the MIT License.
