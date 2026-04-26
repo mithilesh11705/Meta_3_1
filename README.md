@@ -1,231 +1,238 @@
-# PR Review Environment
+# PR Review Environment (`pr-review-env`)
 
-A reinforcement learning environment for training language models to perform automated pull request code review triage. Built on the [OpenEnv](https://github.com/meta-pytorch/OpenEnv) framework.
+Deterministic, OpenEnv-compatible reinforcement learning environment for training LLMs to perform **professional pull request triage**.
 
-**Live Environment:** [hitanshjain1812/meta_final on Hugging Face Spaces](https://huggingface.co/spaces/hitanshjain1812/meta_final)
+This project turns code review from a vague chat task into a **measurable decision process** with structured actions, multi-stage reasoning, and verifiable rewards.
 
-**GitHub:** [mithilesh11705/Meta_3_1](https://github.com/mithilesh11705/Meta_3_1)
+## Quick Links
 
----
+- **Training Notebook:** [GRPO_training.ipynb](./Training%20Script/GRPO_training.ipynb)
+- **Project Blog:** [Blog.md](./Blog.md)
+- **Hugging Face Space:** [hitanshjain1812/meta_final](https://huggingface.co/spaces/hitanshjain1812/meta_final)
+- **Space Endpoint (used in training script defaults):** [hitanshjain1812-mete-final.hf.space](https://hitanshjain1812-mete-final.hf.space)
 
-## Problem
+## 1) Problem Statement
 
-Code review is one of the biggest bottlenecks in modern software engineering. Senior engineers spend 6-10 hours per week reviewing pull requests, yet studies show that 60% of review comments are about surface-level issues — wrong labels, missing priority flags, or boilerplate summaries that don't cite the actual code.
+Modern teams spend significant engineering time on PR review triage. Existing LLM assistants often produce generic summaries, but production triage requires **precise structured judgment**:
 
-Current LLM-based review tools generate generic feedback without structured decision-making. They can't reliably:
+- Should this PR be `approve`, `request_changes`, or `close`?
+- What labels apply (`bug`, `security`, `breaking-change`, etc.)?
+- What is the right priority (`low` to `critical`)?
+- Is the written summary grounded in real evidence from the diff/files?
 
-- Classify the **type** of change (bug, security, enhancement, breaking-change)
-- Assign an appropriate **priority** level
-- Make a **triage decision** (approve, request changes, close)
-- Write an **evidence-grounded summary** that cites the diff
+Without deterministic evaluation, models can sound convincing while being operationally wrong.
 
-This environment frames PR triage as a **verifiable RL problem** where every dimension of a review is scored against a deterministic gold standard, enabling GRPO training with dense, multi-component rewards.
+## 2) Proposed Solution
 
----
+`pr-review-env` provides an interactive environment where an agent reviews realistic PR scenarios and is scored by a deterministic reward function.
 
-## Architecture
+Core solution pillars:
 
-![PR Review Environment Architecture](https://raw.githubusercontent.com/HitanshGithub/meta_hack/main/assets/architecture.png)
+- **100 realistic PR tasks** (30 easy, 35 medium, 35 hard)
+- **3-stage review protocol** (`identify_risk`, `assess_impact`, `final_triage`)
+- **Strict JSON action schema** for reproducible policy learning
+- **Stage-aware multi-axis reward** with contradiction penalties and step penalty
+- **Latency-adjusted scoring** for practical, fast triage behavior
+- **FastAPI + OpenEnv interfaces** for easy integration with RL training loops
 
-`PRReviewEnv` inherits from `openenv.core.env_server.interfaces.Environment` — the official OpenEnv base class — and implements the standard Gymnasium-style API:
+## 3) USP (What Makes This Project Unique)
 
-```python
-from openenv.core.env_server.interfaces import Environment
+- **Deterministic grading, not subjective judging:** No hidden LLM critic in reward computation.
+- **Professional triage behavior, not just summarization:** Decision + labels + priority + evidence.
+- **Stage-aware reasoning:** Reward weights shift by review stage to guide better workflow behavior.
+- **Latency-aware evaluation:** High-quality but slow policies are explicitly discounted.
+- **OpenEnv-native design:** Plug-in ready for environment servers and RL workflows.
 
-class PRReviewEnv(Environment):
-    def reset(self, seed=None, episode_id=None, **kwargs) -> Observation
-    def step(self, action, timeout_s=None, **kwargs) -> Observation
-    @property
-    def state(self) -> State
-```
+## 4) Architecture
 
-### Key Components
+![Architecture](./training_results/architecture.png)
 
-| Component | Description |
-|---|---|
-| **PRReviewEnv** | Core environment inheriting from OpenEnv `Environment` ABC |
-| **100 PR Scenarios** | 30 easy, 35 medium, 35 hard — covering typo fixes to distributed deadlocks |
-| **Multi-Stage Review** | 3-stage pipeline: Identify Risk, Assess Impact, Final Triage |
-| **Reward Engine** | 4-component composite score: Decision + Label F1 + Priority + Summary |
-| **FastAPI Server** | HTTP endpoints (`/reset`, `/step`, `/state`, `/health`) on port 7860 |
+### Main Components
 
----
+- **`pr_review_env/env.py`**
+  - `PRReviewEnv` implementing OpenEnv `Environment`
+  - Task loading, episode lifecycle, stage progression, termination logic
+- **`pr_review_env/reward.py`**
+  - Composite reward breakdown:
+    - decision score
+    - label F1 score
+    - priority distance score
+    - summary + evidence score
+  - consistency penalties and step penalty
+  - latency discount and latency-adjusted score utilities
+- **`pr_review_env/models.py`**
+  - Pydantic schemas for `Observation`, `Action`, `Reward`, `StepResult`
+  - strict validation and allowed label constraints
+- **`server/app.py`**
+  - FastAPI endpoints (`/reset`, `/step`, `/state`, `/tasks`, `/validate`, `/examples`, `/metrics`, `/health`)
+  - session store + TTL eviction
+- **`fixtures/*.json` + `pr_review_env/tasks/*`**
+  - 100 scenario fixtures with gold annotations
+- **`train_grpo.py`**
+  - GRPO training pipeline with LoRA, curriculum sampling, eval logging, plots
 
-## How the Environment Works
+## 5) How It Works (End-to-End)
 
-### Observation Space
-
-Each episode presents the agent with a PR containing:
-
-```
-pr_id, title, description, diff, comments, files_changed,
-author, base_branch, additions, deletions,
-current_step, max_steps, review_stage, stage_prompt
-```
-
-### Action Space
-
-The agent must return a structured JSON decision:
+1. Client starts episode with `POST /reset` and chooses a task.
+2. Environment returns an observation containing PR metadata, diff, comments, and current review stage.
+3. Agent returns one structured action:
 
 ```json
 {
   "decision": "approve | request_changes | close",
-  "labels": ["bug", "security", "enhancement", ...],
+  "labels": ["bug", "security", "enhancement", "documentation", "breaking-change", "needs-tests", "trivial", "urgent"],
   "priority": "low | medium | high | critical",
-  "review_summary": "Evidence-grounded summary citing the diff..."
+  "review_summary": "evidence-grounded summary"
 }
 ```
 
-### Reward Function
+4. Environment computes reward breakdown and returns `reward`, `done`, and next observation.
+5. Episode stops when either:
+   - min completion condition is met (>= step 3 and high reward), or
+   - max steps reached (difficulty-specific: easy 4, medium 6, hard 8).
 
-The reward is a composite score in (0, 1) computed from four independently verifiable components:
+## 6) Reward Design
 
-| Component | Weight | How It's Scored |
-|---|---|---|
-| **Decision** | Exact match against gold standard | 1.0 if correct, scaled otherwise |
-| **Label F1** | Set-level F1 score across 8 valid labels | Precision + Recall based |
-| **Priority** | Distance on ordinal scale (low < medium < high < critical) | 1.0 - normalized distance |
-| **Summary** | Keyword overlap with gold evidence terms | Coverage of key terms |
+Reward is clamped strictly in `(0, 1)` and combines:
 
-A step penalty of -0.02 per extra step encourages efficient triage.
+- **Decision correctness**
+- **Label F1**
+- **Priority distance**
+- **Summary quality + evidence anchoring**
 
-### Task Difficulties
+Additional mechanics:
 
-| Difficulty | Count | Examples | Max Steps |
-|---|---|---|---|
-| **Easy** | 30 | Typo fixes, dead code removal, import ordering | 4 |
-| **Medium** | 35 | Auth refactors, SQL injection, missing validation | 6 |
-| **Hard** | 35 | TOCTOU races, cache stampede, distributed deadlocks | 8 |
+- **Stage-aware weights** (different priorities at each review stage)
+- **Consistency penalty** (example: severe labels with `approve`)
+- **Step penalty** (`0.02` per extra step)
+- **Latency-adjusted score** via exponential discount beyond task budget
 
----
+## 7) Training Pipeline (GRPO)
 
-## Training Pipeline
+Training script: [`train_grpo.py`](./train_grpo.py)
 
-The environment is paired with a GRPO (Group Relative Policy Optimization) training pipeline that fine-tunes `Qwen/Qwen2.5-0.5B-Instruct` using LoRA:
+Pipeline summary:
 
+1. Build curriculum dataset from env tasks (`easy/medium/hard` sampling).
+2. Prompt model with observation and strict JSON schema.
+3. Validate actions with env endpoints and reward breakdown.
+4. Train with `trl.GRPOTrainer` + LoRA adapters.
+5. Log reward history, eval snapshots, and metric plots.
+
+Used tooling:
+
+- TRL (`GRPOTrainer`)
+- Transformers
+- PEFT (LoRA)
+- Optional Unsloth path
+
+## 8) Results and Outcomes
+
+Training artifacts in [`training_results/`](./training_results).
+
+### Visual Results
+
+**Reward progression**
+
+![Reward Curve](./training_results/reward_curve.png)
+
+**Trainer environment reward**
+
+![Trainer Env Reward Curve](./training_results/trainer_env_reward_curve.png)
+
+**Training loss**
+
+![Training Loss](./training_results/training_loss.jpeg)
+
+**Learning rate schedule**
+
+![Learning Rate Curve](./training_results/trainer_learning_rate_curve.png)
+
+**Gradient norm behavior**
+
+![Grad Norm Curve](./training_results/trainer_grad_norm_curve.png)
+
+### Outcome Summary
+
+- The project establishes a **fully reproducible PR triage benchmark** for RL training.
+- It supports **fine-grained diagnostics** (reward components + latency metrics).
+- It is deployable as a **containerized OpenEnv service** and usable from both training and inference scripts.
+- It provides a practical base for future work in multi-agent review, live repo integration, and stronger evidence oracles.
+
+## 9) Repository Structure
+
+```text
+Meta_3_1/
+|- pr_review_env/
+|  |- env.py
+|  |- models.py
+|  |- reward.py
+|  `- tasks/
+|- server/
+|  `- app.py
+|- fixtures/
+|  |- pr_easy.json
+|  |- pr_medium.json
+|  `- pr_hard.json
+|- training_results/
+|- Training Script/
+|  `- GRPO_training.ipynb
+|- train_grpo.py
+|- inference.py
+|- openenv.yaml
+|- Blog.md
+`- README.md
 ```
-Agent generates N completions per prompt
-    -> Each completion is sent to the environment via HTTP POST /step
-    -> Environment returns (observation, reward, done)
-    -> GRPO computes group-relative advantages: A = (r - mean) / std
-    -> Policy is updated to favor high-reward completions
-```
 
-### Training Results
+## 10) Run Locally
 
-Training was run on Kaggle (Tesla T4) with the following configuration:
-
-| Parameter | Value |
-|---|---|
-| Base Model | Qwen/Qwen2.5-0.5B-Instruct |
-| Fine-tuning | LoRA (rank=16, alpha=32) |
-| Optimizer | AdamW (lr=2e-5, cosine schedule) |
-| Batch Size | 4 prompts x 4 completions |
-| Training Steps | 60 |
-| Framework | TRL GRPOTrainer |
-
----
-
-## Quick Start
-
-### 1. Install Dependencies
+### Install
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Start the Environment Server
+### Start Environment Server
 
 ```bash
 uvicorn server.app:app --host 0.0.0.0 --port 7860
 ```
 
-### 3. Interact with the Environment
-
-```python
-import requests
-
-BASE = "http://localhost:7860"
-
-# Reset to an easy task
-obs = requests.post(f"{BASE}/reset", json={"task": "easy"}).json()
-print(obs["title"], obs["review_stage"])
-
-# Submit a review action
-action = {
-    "decision": "request_changes",
-    "labels": ["bug"],
-    "priority": "high",
-    "review_summary": "The diff introduces a race condition in the auth handler."
-}
-result = requests.post(f"{BASE}/step", json=action).json()
-print(f"Reward: {result['reward']:.3f}, Done: {result['done']}")
-```
-
-### 4. Run GRPO Training
+### Quick API Check
 
 ```bash
-python train_grpo.py --env-base-url http://localhost:7860
+curl -X POST http://127.0.0.1:7860/reset -H "Content-Type: application/json" -d '{"task":"easy"}'
 ```
 
----
-
-## Deployment
-
-### Docker (Hugging Face Spaces)
+### Train
 
 ```bash
-docker build -t pr-review-env .
-docker run -p 7860:7860 pr-review-env
+python train_grpo.py --env-base-url http://127.0.0.1:7860
 ```
 
-The Dockerfile is pre-configured for Hugging Face Spaces deployment.
+### Inference
 
----
-
-## Project Structure
-
-```
-Meta_3_1/
-├── pr_review_env/          # Core environment package
-│   ├── env.py              # PRReviewEnv(Environment) — OpenEnv base class
-│   ├── models.py           # Action, Observation, Reward, StepResult schemas
-│   ├── reward.py           # 4-component composite reward engine
-│   └── tasks/              # 100 PR scenarios (easy/, medium/, hard/)
-├── server/
-│   └── app.py              # FastAPI HTTP server
-├── train_grpo.py           # GRPO training script (TRL + LoRA)
-├── inference.py            # Single-PR inference script
-├── openenv.yaml            # OpenEnv environment manifest
-├── Dockerfile              # HF Spaces deployment
-├── demo/
-│   └── PR_Review_GRPO_Kaggle.ipynb  # Kaggle training notebook
-└── requirements.txt
+```bash
+python inference.py
 ```
 
----
+## 11) OpenEnv Compatibility
 
-## OpenEnv Integration
+- Implements OpenEnv environment interfaces and canonical types.
+- Ships with [`openenv.yaml`](./openenv.yaml) manifest.
+- Supports concurrent sessions via server-side session management.
 
-This environment is built on top of **OpenEnv** (`openenv-core >= 0.2.3`):
+## 12) Future Roadmap
 
-- `PRReviewEnv` inherits from `openenv.core.env_server.interfaces.Environment`
-- Implements the abstract `reset()`, `step()`, and `state` contract
-- Uses OpenEnv canonical types: `Action`, `Observation`, `State`
-- Ships with `openenv.yaml` manifest for environment discovery
-- Deployed as a Docker-based Hugging Face Space
+- Multi-agent reviewer debate and consensus triage
+- Live GitHub PR shadow-mode evaluation
+- Static-analysis assisted reward signals
+- Harder long-context and multi-file dependency tasks
 
----
+## 13) References
 
-## References
+- [OpenEnv](https://github.com/meta-pytorch/OpenEnv)
+- [TRL Documentation](https://huggingface.co/docs/trl)
+- [Qwen Models](https://huggingface.co/Qwen)
+- [LoRA Paper](https://arxiv.org/abs/2106.09685)
 
-- [OpenEnv Framework](https://github.com/meta-pytorch/OpenEnv)
-- [TRL Library (GRPO)](https://huggingface.co/docs/trl)
-- [Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)
-- [LoRA: Low-Rank Adaptation](https://arxiv.org/abs/2106.09685)
-
----
-
-## License
-
-This project is released under the MIT License.
